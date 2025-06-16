@@ -1,0 +1,12 @@
+{
+  "name": "steamrip-addon",
+  "module": "main.ts",
+  "type": "module",
+  "dependencies": {
+    "ogi-addon": "^1.1.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.3",
+    "typescript": "^5.8.3"
+  }
+}
