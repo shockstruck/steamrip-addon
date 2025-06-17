@@ -2,6 +2,63 @@ import type { Page } from "puppeteer";
 import readline from "readline";
 import puppeteer from "puppeteer-extra";
 import { PUPPETEER_OPTIONS } from "./services/BaseService";
+import { showInfoPopup } from "./popup-utils";
+
+/**
+ * Shows an informational popup explaining what will happen with CLI captcha solving
+ */
+async function showCaptchaCliInfoPopup(pageUrl: string, siteKey: string | null): Promise<void> {
+  const infoBox = [
+    { label: "Page", value: pageUrl }
+  ];
+  
+  if (siteKey) {
+    infoBox.push({ label: "Site Key", value: siteKey });
+  }
+  
+  await showInfoPopup({
+    title: "reCAPTCHA Detected",
+    icon: "🛡️",
+    message: "A captcha challenge has been detected and needs to be solved manually.",
+    infoBox,
+    steps: [
+      "We will open the page in a new browser window",
+      "Complete the reCAPTCHA challenge on that page",
+      "We will take care of the rest."
+    ],
+    buttonText: "Continue",
+    testModeMessage: "Test Mode: This popup will close automatically"
+  });
+}
+
+/**
+ * Shows an informational popup explaining what will happen with popup captcha solving
+ */
+async function showCaptchaPopupInfoPopup(pageUrl: string, siteKey: string | null): Promise<void> {
+  const infoBox = [
+    { label: "Page", value: pageUrl }
+  ];
+  
+  if (siteKey) {
+    infoBox.push({ label: "Site Key", value: siteKey });
+  }
+  
+  await showInfoPopup({
+    title: "reCAPTCHA Popup Mode",
+    icon: "🪟",
+    message: "A focused captcha window will open for easier solving.",
+    infoBox,
+    steps: [
+      "A clean browser window will open showing only the captcha",
+      "Complete the reCAPTCHA challenge in that window",
+      "The window will close automatically when solved",
+      "Processing will continue automatically"
+    ],
+    footerNote: "✨ This method provides a cleaner, distraction-free captcha experience",
+    buttonText: "Open Captcha Window",
+    testModeMessage: "Test Mode: This popup will close automatically"
+  });
+}
 
 /**
  * Prompts the CLI user to manually solve a visible Google reCAPTCHA challenge and provide the resulting token.
@@ -21,6 +78,9 @@ export async function promptForRecaptchaToken(page: Page): Promise<string> {
     const el = document.querySelector<HTMLDivElement>('div.g-recaptcha[data-sitekey]');
     return el?.getAttribute('data-sitekey') ?? null;
   });
+
+  // Show informational popup first
+  await showCaptchaCliInfoPopup(page.url(), siteKey);
 
   console.log("\n[steamrip-addon] Captcha detected!");
   console.log(` › Page: ${page.url()}`);
@@ -87,6 +147,9 @@ export async function solveRecaptchaWithPopup(page: Page): Promise<string> {
   if (!siteKey) {
     throw new Error("No visible reCAPTCHA widget found on the page – cannot open popup.");
   }
+
+  // Show informational popup first
+  await showCaptchaPopupInfoPopup(page.url(), siteKey);
 
   console.log("[steamrip-addon] Opening a clean captcha window for you to solve ...");
 
@@ -187,6 +250,7 @@ export async function solveRecaptchaWithPopup(page: Page): Promise<string> {
       }
     `;
     document.head.appendChild(style);
+    console.log('injected styles');
   });
 
   // Wait for the token to appear (Google injects it into a hidden textarea once solved).

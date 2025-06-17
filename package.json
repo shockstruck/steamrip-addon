@@ -12,12 +12,15 @@
     "puppeteer-extra-plugin-stealth": "^2.11.2"
   },
   "scripts": {
-    "recaptcha-demo": "bun run examples/recaptcha-demo.ts"
+    "recaptcha-demo": "bun run examples/recaptcha-demo.ts",
+    "filecrypt-demo": "bun run examples/filecrypt-demo.ts"
   },
   "devDependencies": {
     "@types/bun": "^1.2.16",
     "@types/jsdom": "^21.1.7",
     "@types/node": "^24.0.3",
+    "@types/node-notifier": "^8.0.5",
+    "@types/prompts": "^2.4.9",
     "typescript": "^5.8.3"
   }
 }

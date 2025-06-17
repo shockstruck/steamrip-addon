@@ -13,10 +13,7 @@ export default class PixelDrainService extends DLService {
     puppeteer.use(stealth());
     puppeteer.use(adblock());
 
-    const browser = await puppeteer.launch({
-      ...PUPPETEER_OPTIONS,
-      headless: false
-    });
+    const browser = await puppeteer.launch(PUPPETEER_OPTIONS);
     const page = await browser.newPage();
     await page.goto(url);
     

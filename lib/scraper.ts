@@ -13,7 +13,8 @@ export const SCRAPE_PRIORITY = {
   'DataNodes': 0,
   'MegaDB': 0,
   '1FICHIER': 9,
-  'PixelDrain': 10
+  'PixelDrain': 10,
+  'FILECRYPT': 8 // High priority since it's a link redirector that leads to actual download links
 }
 export default class Scraper {
   public catalog: { games: { name: string, url: string }[], lastUpdated: number } = { games: [], lastUpdated: 0 };

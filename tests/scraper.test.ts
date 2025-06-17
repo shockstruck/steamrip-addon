@@ -14,14 +14,19 @@ import adblock from 'puppeteer-extra-plugin-adblocker';
 puppeteer.use(stealth());
 puppeteer.use(adblock());
 
-// get links from LINKS.txt
-type ValidLink = 'steamrip' | 'buzzheavier' | '1fichier' | 'pixeldrain';
+type ValidLink = 'steamrip' | 'buzzheavier' | '1fichier' | 'pixeldrain' | 'gofile' | 'filecrypt-test';
+export async function getLinks() {
+  // get links from LINKS.txt
 
-const links = (await Bun.file('./tests/LINKS.txt').text()).split('\n').map(line => line.trim());
-const linksMap: Record<ValidLink, string> = { ...links.map(line => {
-  const [service, url] = line.split(' ');
-  return { [service]: url };
-}).reduce((acc, curr) => ({ ...acc, ...curr }), {}) as Record<ValidLink, string> };
+  const links = (await Bun.file('./tests/LINKS.txt').text()).split('\n').map(line => line.trim());
+  const linksMap: Record<ValidLink, string> = { ...links.map(line => {
+    const [service, url] = line.split(' ');
+    return { [service]: url };
+  }).reduce((acc, curr) => ({ ...acc, ...curr }), {}) as Record<ValidLink, string> };
+  return linksMap;
+}
+
+const linksMap = await getLinks();
 
 describe('Steamrip', () => {
   it('can scrape all links and provide the correct values', async () => {
@@ -60,6 +65,7 @@ describe('Buzzheavier', () => {
 });
 import FichierService from '../lib/services/1Fichier';
 import PixelDrainService from '../lib/services/PixelDrain';
+import GofileService from '../lib/services/Gofile';
 
 describe('FichierService', () => {
   it('can scrape download links from 1fichier', async () => {
@@ -90,5 +96,14 @@ describe('PixelDrain', () => {
       name: "PIXELDRAIN",
       url: expect.any(String)
     });
+  }, Number.MAX_SAFE_INTEGER);
+});
+
+describe('Gofile', () => {
+  it('can scrape download links from gofile', async () => {
+    const service = new GofileService();
+    const links = await service.scrapeDownloadLinks(linksMap.gofile);
+    expect(links).toBeDefined();
+    expect(links.length).toBeGreaterThan(0);
   }, Number.MAX_SAFE_INTEGER);
 });
