@@ -174,3 +174,12 @@ dist
 # Finder (MacOS) folder config
 .DS_Store
 *.log
+
+# Local files
+catalog.json
+
+# Demo files
+*.png
+
+# Test files (to prevent them from being committed)
+*.test.ts
