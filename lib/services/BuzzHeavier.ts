@@ -27,38 +27,15 @@ export default class BuzzheavierService extends DLService {
       throw new Error('No download button found');
     }
 
-    await page.screenshot({ path: 'page.png' });
+    const downloadUrl = await this.downloadCatcher(page, downloadButton);
 
-    const downloadUrl = await new Promise<string | undefined>(async (resolve, reject) => {
-      await downloadButton.click();
-      const cdp = await page.createCDPSession();
-      await cdp.send('Browser.setDownloadBehavior', {
-        behavior: 'allow',
-        downloadPath: '/tmp',
-        eventsEnabled: true,
-      });
-      cdp.on('Browser.downloadWillBegin', async (event) => {
-        console.log(event.url);
-        // cancel the download
-        await cdp.send('Browser.cancelDownload', {
-          guid: event.guid,
-        });
-
-        resolve(event.url);
-      });
-
-      // wait 5 seconds, and if not resolved, reject
-      setTimeout(() => {
-        resolve(undefined);
-      }, 5000);
-    });
     if (!downloadUrl) {
       throw new Error('No download url found');
     }
     await browser.close();
     return [{
       url: downloadUrl,
-      name: 'Buzzheavier',
+      name: 'BUZZHEAVIER',
     }];
   }
 }

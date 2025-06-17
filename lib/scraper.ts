@@ -12,7 +12,8 @@ export const SCRAPE_PRIORITY = {
   'Buzzheavier': 10,
   'DataNodes': 0,
   'MegaDB': 0,
-  '1FICHIER': 9
+  '1FICHIER': 9,
+  'PixelDrain': 10
 }
 export default class Scraper {
   public catalog: { games: { name: string, url: string }[], lastUpdated: number } = { games: [], lastUpdated: 0 };

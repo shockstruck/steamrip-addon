@@ -3,9 +3,9 @@ import { DLService, PUPPETEER_OPTIONS } from "./BaseService";
 import stealth from "puppeteer-extra-plugin-stealth";
 import adblock from "puppeteer-extra-plugin-adblocker";
 
-export default class FischierService extends DLService {
+export default class FichierService extends DLService {
   public constructor() {
-    super('Fischier', 10);
+    super('Fichier', 10);
   }
 
   async scrapeDownloadLinks(url: string) {
@@ -118,7 +118,7 @@ export default class FischierService extends DLService {
       if (href) {
         console.log('found ok button', href);
         await browser.close();
-        return [{ url: href, name: 'Fischier' }];
+        return [{ url: href, name: '1FICHIER' }];
       }
     }
 

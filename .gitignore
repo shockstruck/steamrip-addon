@@ -181,5 +181,5 @@ catalog.json
 # Demo files
 *.png
 
-# Test files (to prevent them from being committed)
-*.test.ts
+# Links
+tests/LINKS.txt
