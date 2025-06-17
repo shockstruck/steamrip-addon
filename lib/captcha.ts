@@ -182,113 +182,142 @@ export async function solveRecaptchaWithPopup(page: Page): Promise<string> {
   
   const popupPage = await browser.newPage();
   
-  // Set a smaller, more focused viewport
-  await popupPage.setViewport({ width: 400, height: 550 });
+  // Set up browser closure detection
+  let browserClosed = false;
   
-  await popupPage.goto(page.url(), { waitUntil: "networkidle2" });
-
-  // Wait a bit more for the page to fully load, then inject styles
-  await new Promise(resolve => setTimeout(resolve, 1000));
-  
-  // Inject CSS to hide everything except the captcha and add some styling
-  await popupPage.evaluate(() => {
-    const style = document.createElement('style');
-    style.textContent = `
-      /* Hide everything by default */
-      body * {
-        visibility: hidden !important;
-      }
-      
-      /* Show only the captcha container and its children */
-      .g-recaptcha,
-      .g-recaptcha *,
-      iframe[src*="recaptcha"] {
-        visibility: visible !important;
-      }
-      
-      /* Clean up the page styling */
-      body {
-        margin: 0 !important;
-        padding: 20px !important;
-        background: #f5f5f5 !important;
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
-        visibility: visible !important;
-      }
-      
-      /* Center the captcha */
-      .g-recaptcha {
-        margin: 20px auto !important;
-        display: block !important;
-      }
-      
-      /* Add a helpful header */
-      body::before {
-        content: "Please solve the reCAPTCHA below to continue" !important;
-        display: block !important;
-        text-align: center !important;
-        padding: 10px !important;
-        margin-bottom: 20px !important;
-        background: #4285f4 !important;
-        color: white !important;
-        border-radius: 4px !important;
-        font-size: 14px !important;
-        font-weight: 500 !important;
-        visibility: visible !important;
-      }
-      
-      /* Hide any other page content that might be visible */
-      header, nav, footer, .header, .nav, .footer,
-      .sidebar, .menu, .navigation, .ads, .advertisement {
-        display: none !important;
-      }
-      
-      /* Ensure captcha iframe is properly sized */
-      iframe[src*="recaptcha"] {
-        border: none !important;
-        border-radius: 4px !important;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1) !important;
-      }
-    `;
-    document.head.appendChild(style);
-    console.log('injected styles');
+  browser.on('disconnected', () => {
+    browserClosed = true;
   });
 
-  // Wait for the token to appear (Google injects it into a hidden textarea once solved).
-  await popupPage.waitForFunction(
-    () => {
+  popupPage.on('close', () => {
+    browserClosed = true;
+  });
+  
+  try {
+    // Set a smaller, more focused viewport
+    await popupPage.setViewport({ width: 400, height: 550 });
+    
+    await popupPage.goto(page.url(), { waitUntil: "networkidle2" });
+
+    // Wait a bit more for the page to fully load, then inject styles
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    // Check if browser was closed during loading
+    if (browserClosed || popupPage.isClosed()) {
+      throw new Error("Captcha browser window was closed by user");
+    }
+    
+    // Inject CSS to hide everything except the captcha and add some styling
+    await popupPage.evaluate(() => {
+      const style = document.createElement('style');
+      style.textContent = `
+        /* Hide everything by default */
+        body * {
+          visibility: hidden !important;
+        }
+        
+        /* Show only the captcha container and its children */
+        .g-recaptcha,
+        .g-recaptcha *,
+        iframe[src*="recaptcha"] {
+          visibility: visible !important;
+        }
+        
+        /* Clean up the page styling */
+        body {
+          margin: 0 !important;
+          padding: 20px !important;
+          background: #f5f5f5 !important;
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif !important;
+          visibility: visible !important;
+        }
+        
+        /* Center the captcha */
+        .g-recaptcha {
+          margin: 20px auto !important;
+          display: block !important;
+        }
+        
+        /* Add a helpful header */
+        body::before {
+          content: "Please solve the reCAPTCHA below to continue" !important;
+          display: block !important;
+          text-align: center !important;
+          padding: 10px !important;
+          margin-bottom: 20px !important;
+          background: #4285f4 !important;
+          color: white !important;
+          border-radius: 4px !important;
+          font-size: 14px !important;
+          font-weight: 500 !important;
+          visibility: visible !important;
+        }
+        
+        /* Hide any other page content that might be visible */
+        header, nav, footer, .header, .nav, .footer,
+        .sidebar, .menu, .navigation, .ads, .advertisement {
+          display: none !important;
+        }
+        
+        /* Ensure captcha iframe is properly sized */
+        iframe[src*="recaptcha"] {
+          border: none !important;
+          border-radius: 4px !important;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.1) !important;
+        }
+      `;
+      document.head.appendChild(style);
+      console.log('injected styles');
+    });
+
+    // Wait for the token to appear (Google injects it into a hidden textarea once solved).
+    await popupPage.waitForFunction(
+      () => {
+        const ta = document.querySelector<HTMLTextAreaElement>(
+          'textarea[name="g-recaptcha-response"], #g-recaptcha-response'
+        );
+        return ta && ta.value.length > 0;
+      },
+      {
+        polling: 500,
+        timeout: 0, // wait indefinitely until the user completes the captcha
+      }
+    );
+
+    // Check if browser was closed during captcha solving
+    if (browserClosed || popupPage.isClosed()) {
+      throw new Error("Captcha browser window was closed by user");
+    }
+
+    const token: string = await popupPage.evaluate(() => {
       const ta = document.querySelector<HTMLTextAreaElement>(
         'textarea[name="g-recaptcha-response"], #g-recaptcha-response'
       );
-      return ta && ta.value.length > 0;
-    },
-    {
-      polling: 500,
-      timeout: 0, // wait indefinitely until the user completes the captcha
-    }
-  );
-
-  const token: string = await popupPage.evaluate(() => {
-    const ta = document.querySelector<HTMLTextAreaElement>(
-      'textarea[name="g-recaptcha-response"], #g-recaptcha-response'
-    );
-    return ta?.value ?? "";
-  });
-
-  await browser.close();
-
-  // Propagate the token back into the original page so automation can resume.
-  await page.evaluate((t) => {
-    const textareas = document.querySelectorAll<HTMLTextAreaElement>(
-      'textarea[name="g-recaptcha-response"], #g-recaptcha-response'
-    );
-    textareas.forEach((ta) => {
-      ta.value = t;
-      ta.dispatchEvent(new Event('input', { bubbles: true }));
-      ta.dispatchEvent(new Event('change', { bubbles: true }));
+      return ta?.value ?? "";
     });
-  }, token);
 
-  console.log("[steamrip-addon] Captcha solved and token injected – continuing …");
+    // Propagate the token back into the original page so automation can resume.
+    await page.evaluate((t) => {
+      const textareas = document.querySelectorAll<HTMLTextAreaElement>(
+        'textarea[name="g-recaptcha-response"], #g-recaptcha-response'
+      );
+      textareas.forEach((ta) => {
+        ta.value = t;
+        ta.dispatchEvent(new Event('input', { bubbles: true }));
+        ta.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+    }, token);
 
-  return token;
+    console.log("[steamrip-addon] Captcha solved and token injected – continuing …");
+
+    return token;
+
+  } catch (error) {
+    if (browserClosed || popupPage.isClosed()) {
+      throw new Error("Captcha browser window was closed by user");
+    }
+    throw error;
+  } finally {
+    await browser.close();
+  }
 }

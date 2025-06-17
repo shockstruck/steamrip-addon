@@ -111,6 +111,18 @@ async function waitForFilecryptRedirect(
   const startTime = Date.now();
   let currentUrl = initialUrl;
 
+  // Set up browser closure detection
+  let browserClosed = false;
+  const browser = page.browser();
+  
+  browser.on('disconnected', () => {
+    browserClosed = true;
+  });
+
+  page.on('close', () => {
+    browserClosed = true;
+  });
+
   try {
     // Navigate to the initial URL
     await page.goto(initialUrl, { 
@@ -129,9 +141,21 @@ async function waitForFilecryptRedirect(
 
     // Wait for automatic redirect by polling the current URL
     while (Date.now() - startTime < timeout) {
-      await new Promise(resolve => setTimeout(resolve, 1000)); // Check every 2 seconds
+      // Check if browser was closed
+      if (browserClosed || page.isClosed()) {
+        throw new Error("Browser window was closed by user during FileCrypt processing");
+      }
+
+      await new Promise(resolve => setTimeout(resolve, 1000)); // Check every 1 second
       
-      currentUrl = page.url();
+      try {
+        currentUrl = page.url();
+      } catch (error) {
+        if (browserClosed || page.isClosed()) {
+          throw new Error("Browser window was closed by user during FileCrypt processing");
+        }
+        throw error;
+      }
       
       if (!isFilecryptUrl(currentUrl)) {
         console.log(`[filecrypt] Redirected to: ${currentUrl}`);
@@ -151,6 +175,10 @@ async function waitForFilecryptRedirect(
         }
       } catch {
         // Navigation timeout is expected, continue polling
+        // But check if browser was closed during navigation wait
+        if (browserClosed || page.isClosed()) {
+          throw new Error("Browser window was closed by user during FileCrypt processing");
+        }
       }
     }
 
@@ -158,6 +186,9 @@ async function waitForFilecryptRedirect(
     return null;
 
   } catch (error) {
+    if (browserClosed || page.isClosed()) {
+      throw new Error("Browser window was closed by user during FileCrypt processing");
+    }
     console.log(`[filecrypt] Error during redirect wait: ${error}`);
     return null;
   }

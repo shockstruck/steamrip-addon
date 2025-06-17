@@ -40,6 +40,17 @@ export async function showInfoPopup(config: PopupConfig): Promise<void> {
   const page = await browser.newPage();
   await page.setViewport(windowSize);
 
+  // Set up browser closure detection
+  let browserClosed = false;
+  
+  browser.on('disconnected', () => {
+    browserClosed = true;
+  });
+
+  page.on('close', () => {
+    browserClosed = true;
+  });
+
   // Create simple HTML content
   const htmlContent = `
     <!DOCTYPE html>
@@ -202,9 +213,13 @@ export async function showInfoPopup(config: PopupConfig): Promise<void> {
   try {
     await page.waitForFunction(() => !document.body, { timeout: 0 });
   } catch (error) {
+    if (browserClosed || page.isClosed()) {
+      throw new Error(`User cancelled operation by closing ${config.title} dialog`);
+    }
     console.log(`[popup] Popup interaction completed or timed out`);
+  } finally {
+    await browser.close();
   }
   
-  await browser.close();
   console.log(`[popup] User confirmed - continuing...`);
 } 
