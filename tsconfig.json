@@ -28,5 +28,6 @@
   },
   "files": [
     "main.ts"
-  ]
+  ],
+  "include": ["lib/**/*.ts", "main.ts"]
 }

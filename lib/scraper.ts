@@ -1,6 +1,8 @@
 import { JSDOM } from 'jsdom';
 import axios from 'axios';
 import * as fs from 'fs/promises';
+import { Effect } from 'effect';
+import { FileSystemError, NetworkError, ScraperError } from './errors';
 
 // Priority scraper ranking:
 // 0 - impossible to get it effectively
@@ -18,63 +20,80 @@ export const SCRAPE_PRIORITY = {
 }
 export default class Scraper {
   public catalog: { games: { name: string, url: string }[], lastUpdated: number } = { games: [], lastUpdated: 0 };
-  async upgradeLocals(force: boolean = false) {
-    if (!force) {
-      if (this.catalog.lastUpdated > new Date().getTime() - 1000 * 60 * 60 * 24) {
+  
+  upgradeLocals(force: boolean = false): Effect.Effect<void, FileSystemError | NetworkError | ScraperError> {
+    return Effect.gen(function*(this: Scraper) {
+      if (!force && this.catalog.lastUpdated > Date.now() - 1000 * 60 * 60 * 24) {
         return;
       }
-    }
-    const games = await this.scrapeAllLinks();
-    const object = {
-      games: games,
-      lastUpdated: new Date().getTime()
-    }
-    await fs.writeFile('catalog.json', JSON.stringify(object, null, 2));
-    console.log('catalog.json updated');
+      const games = yield* this.scrapeAllLinks();
+      const catalogObject = {
+        games: games,
+        lastUpdated: Date.now()
+      };
+      yield* Effect.tryPromise({
+        try: () => fs.writeFile('catalog.json', JSON.stringify(catalogObject, null, 2)),
+        catch: (error) => new FileSystemError({ path: 'catalog.json', error })
+      });
+      console.log('catalog.json updated');
+    }.bind(this));
   }
-  async scrapeAllLinks() {
-    const response = await axios.get('https://steamrip.com/games-list-page/');
-    const dom = new JSDOM(response.data);
-    const document = dom.window.document;
 
-    // Extract all game links
-    const gameLinks = Array.from(document.querySelectorAll('.az-list-item a'));
-    const games = gameLinks.map((link: Element) => {
-      const name = link.textContent?.trim();
-      const url = 'https://steamrip.com' + link.getAttribute('href')?.trim();
-      return { name, url };
+  scrapeAllLinks(): Effect.Effect<{ name: string | undefined; url: string; }[], NetworkError> {
+    return Effect.gen(function*() {
+      const response = yield* Effect.tryPromise({
+        try: () => axios.get('https://steamrip.com/games-list-page/'),
+        catch: (error) => new NetworkError({ url: 'https://steamrip.com/games-list-page/', error })
+      });
+      const dom = new JSDOM(response.data);
+      const document = dom.window.document;
+
+      const gameLinks = Array.from(document.querySelectorAll('.az-list-item a'));
+      return gameLinks.map((link: Element) => {
+        const name = link.textContent?.trim();
+        const href = link.getAttribute('href')?.trim();
+        const url = href ? 'https://steamrip.com' + href : '';
+        return { name, url };
+      });
     });
-
-    return games;
-  }
-  async processLocals() {
-    const catalog = await fs.readFile('catalog.json', 'utf8');
-    this.catalog = JSON.parse(catalog);
   }
 
-  async scrapeGameDownloads(url: string) {
-    const response = await axios.get(url);
-    const dom = new JSDOM(response.data);
-    const document = dom.window.document;
-    const result: { service: string, url: string }[] = [];
-    document.querySelectorAll('p[style*="text-align: center"]').forEach(p => {
-      const link = p.querySelector('a.shortc-button') as HTMLAnchorElement | null;
-      const label = (p.querySelector('strong') || p.querySelector('span')) as HTMLElement | null;
+  processLocals(): Effect.Effect<void, FileSystemError> {
+    return Effect.gen(function*(this: Scraper) {
+      const catalogContent = yield* Effect.tryPromise({
+        try: () => fs.readFile('catalog.json', 'utf8'),
+        catch: (error) => new FileSystemError({ path: 'catalog.json', error })
+      });
+      this.catalog = JSON.parse(catalogContent);
+    }.bind(this));
+  }
 
-      if (link && label && label.textContent) {
-        const href = link.getAttribute('href');
-        let url = '';
-        if (href) {
-          url = href.startsWith('//') ? 'https:' + href : href;
+  scrapeGameDownloads(url: string): Effect.Effect<{ service: string; url: string; }[], NetworkError> {
+    return Effect.gen(function*() {
+      const response = yield* Effect.tryPromise({
+        try: () => axios.get(url),
+        catch: (error) => new NetworkError({ url, error })
+      });
+      const dom = new JSDOM(response.data);
+      const document = dom.window.document;
+      const result: { service: string, url: string }[] = [];
+      document.querySelectorAll('p[style*="text-align: center"]').forEach(p => {
+        const link = p.querySelector('a.shortc-button') as HTMLAnchorElement | null;
+        const label = (p.querySelector('strong') || p.querySelector('span')) as HTMLElement | null;
+
+        if (link && label && label.textContent) {
+          const href = link.getAttribute('href');
+          let finalUrl = '';
+          if (href) {
+            finalUrl = href.startsWith('//') ? 'https:' + href : href;
+          }
+          result.push({
+            service: label.textContent.trim().toUpperCase(),
+            url: finalUrl
+          });
         }
-        result.push({
-          service: label.textContent.trim().toUpperCase(),
-          url: url
-        });
-      }
+      });
+      return result;
     });
-
-
-    return result;
   }
 }

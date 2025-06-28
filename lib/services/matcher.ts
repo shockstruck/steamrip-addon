@@ -5,56 +5,83 @@ import BuzzheavierService from "./BuzzHeavier";
 import FichierService from "./1Fichier";
 import FileCryptService from "./FileCrypt";
 import GofileService from "./Gofile";
+import { Effect } from "effect";
+import { InvalidUrlError, NoServiceFoundError, UnknownServiceError } from "../errors";
 
-export function getService(name: string): DLService {
+export const getService = (name: string) => Effect.gen(function*() {
   switch (name) {
     case 'Buzzheavier':
-      return new BuzzheavierService();
+      return yield* Effect.succeed(new BuzzheavierService());
     case 'Fichier':
-      return new FichierService();
+      return yield* Effect.succeed(new FichierService());
     case 'FileCrypt':
-      return new FileCryptService();
+      return yield* Effect.succeed(new FileCryptService());
+    case 'Gofile':
+      return yield* Effect.succeed(new GofileService());
     default:
-      throw new Error(`Unknown service: ${name}`);
+      return yield* Effect.fail(new UnknownServiceError({ name }));
   }
-}
+});
 
 /**
  * Detects the appropriate service based on the URL
  */
-export function detectServiceFromUrl(url: string): DLService | null {
+export const detectServiceFromUrl = (url: string) => Effect.gen(function* () {
+  const urlObj = yield* Effect.try({
+    try: () => new URL(url),
+    catch: () => new InvalidUrlError({ url })
+  });
+  const hostname = urlObj.hostname.toLowerCase();
+
+  // Check for FileCrypt
+  if (isFilecryptUrl(url)) {
+    return yield* Effect.succeed(new FileCryptService());
+  }
+
+  // Check for other services based on hostname
+  if (hostname.includes('buzzheavier')) {
+    return yield* Effect.succeed(new BuzzheavierService());
+  }
+
+  if (hostname.includes('1fichier')) {
+    return yield* Effect.succeed(new FichierService());
+  }
+
+  if (hostname.includes('gofile')) {
+    return yield* Effect.succeed(new GofileService());
+  }
+  
+  return yield* Effect.fail(new NoServiceFoundError());
+});
+
+/**
+ * Gets the service name from a URL
+ */
+export function getServiceNameFromUrl(url: string): string | null {
   try {
     const urlObj = new URL(url);
     const hostname = urlObj.hostname.toLowerCase();
 
     // Check for FileCrypt
     if (isFilecryptUrl(url)) {
-      return new FileCryptService();
+      return 'FileCrypt';
     }
 
     // Check for other services based on hostname
     if (hostname.includes('buzzheavier')) {
-      return new BuzzheavierService();
+      return 'Buzzheavier';
     }
 
     if (hostname.includes('1fichier')) {
-      return new FichierService();
+      return 'Fichier';
     }
 
     if (hostname.includes('gofile')) {
-      return new GofileService();
+      return 'Gofile';
     }
-
+    
     return null;
   } catch {
     return null;
   }
-}
-
-/**
- * Gets the service name from a URL
- */
-export function getServiceNameFromUrl(url: string): string | null {
-  const service = detectServiceFromUrl(url);
-  return service?.name || null;
 }

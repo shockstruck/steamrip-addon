@@ -1,5 +1,7 @@
+import { Effect } from "effect";
 import type { ElementHandle, Page } from "puppeteer";
 import puppeteer, { type VanillaPuppeteer } from "puppeteer-extra";
+import { DownloadCatcherError } from "../errors";
 export const PUPPETEER_OPTIONS: Parameters<VanillaPuppeteer["launch"]>[0] = {
   headless: true,
   args: [
@@ -19,37 +21,54 @@ export class DLService {
     this.name = name;
     this.priority = priority;
   }
-  async scrapeDownloadLinks(url: string): Promise<{ name: string, url: string }[]> {
-    throw new Error('Not implemented');
+  scrapeDownloadLinks(url: string): Effect.Effect<{ name: string, url: string }[], Error> {
+    return Effect.die(new Error('Not implemented'));
   }
 
-  async downloadCatcher(page: Page, downloadButton: ElementHandle<Element>) {
-    const downloadUrl = await new Promise<string | undefined>(async (resolve, reject) => {
-      await downloadButton.click();
-      console.log('clicked download button');
-      const cdp = await page.createCDPSession();
-      console.log('created cdp session');
-      await cdp.send('Browser.setDownloadBehavior', {
-        behavior: 'allow',
-        downloadPath: '/tmp',
-        eventsEnabled: true,
-      });
-      cdp.on('Browser.downloadWillBegin', async (event) => {
-        console.log(event.url);
-        // cancel the download
-        await cdp.send('Browser.cancelDownload', {
-          guid: event.guid,
+  downloadCatcher(page: Page, downloadButton: ElementHandle<Element>): Effect.Effect<string | undefined, DownloadCatcherError> {
+    return Effect.async<string | undefined, DownloadCatcherError>((resume) => {
+      Effect.runPromise(Effect.gen(function* () {
+        yield* Effect.tryPromise({
+          try: () => downloadButton.click(),
+          catch: (error) => new DownloadCatcherError({ error })
+        });
+        console.log('clicked download button');
+
+        const cdp = yield* Effect.tryPromise({
+          try: () => page.createCDPSession(),
+          catch: (error) => new DownloadCatcherError({ error })
+        });
+        console.log('created cdp session');
+
+        yield* Effect.tryPromise({
+          try: () => cdp.send('Browser.setDownloadBehavior', {
+            behavior: 'allow',
+            downloadPath: '/tmp',
+            eventsEnabled: true,
+          }),
+          catch: (error) => new DownloadCatcherError({ error })
         });
 
-        resolve(event.url);
-      });
-      console.log('waiting for download to begin');
-      // wait 5 seconds, and if not resolved, reject
-      setTimeout(() => {
-        resolve(undefined);
-      }, 5000);
-    });
+        cdp.on('Browser.downloadWillBegin', (event) => {
+          console.log(event.url);
+          // cancel the download
+          cdp.send('Browser.cancelDownload', {
+            guid: event.guid,
+          }).then(() => {
+            resume(Effect.succeed(event.url));
+          }).catch((error) => {
+            resume(Effect.fail(new DownloadCatcherError({ error })));
+          });
+        });
 
-    return downloadUrl;
+        console.log('waiting for download to begin');
+        // wait 5 seconds, and if not resolved, reject
+        setTimeout(() => {
+          resume(Effect.succeed(undefined));
+        }, 5000);
+      })).catch((error) => {
+        resume(Effect.fail(new DownloadCatcherError({ error })))
+      });
+    });
   }
 }

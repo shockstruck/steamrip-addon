@@ -1,52 +1,71 @@
 import puppeteer from "puppeteer-extra";
+import { type Browser, type ElementHandle } from "puppeteer";
 import { DLService, PUPPETEER_OPTIONS } from "./BaseService";
-import stealth from "puppeteer-extra-plugin-stealth";
-import adblock from "puppeteer-extra-plugin-adblocker";
-import { ElementHandle } from "puppeteer";
+import { Effect } from "effect";
+import { PixelDrainError, DownloadCatcherError } from "../errors";
 
 export default class PixelDrainService extends DLService {
   public constructor() {
-    super('PixelDrain', 10);
+    super('PixelDrain', 3);
   }
 
-  async scrapeDownloadLinks(url: string): Promise<{ name: string; url: string; }[]> {
-    puppeteer.use(stealth());
-    puppeteer.use(adblock());
+  scrapeDownloadLinks(url: string): Effect.Effect<{ name: string; url: string; }[], PixelDrainError | DownloadCatcherError> {
+    const acquireBrowser = Effect.tryPromise({
+      try: () => puppeteer.launch(PUPPETEER_OPTIONS),
+      catch: (error) => new PixelDrainError({ url, error })
+    });
 
-    const browser = await puppeteer.launch(PUPPETEER_OPTIONS);
-    const page = await browser.newPage();
-    await page.goto(url);
-    
-    const downloadButtons = await page.$$('button.button_highlight');
-    if (downloadButtons.length === 0) {
-      throw new Error('No download button found');
-    }
-    // Make the search for the download button fully async
-    let downloadButton: ElementHandle<HTMLButtonElement> | null = null;
-    for (const button of downloadButtons) {
-      const isDownload = await button.evaluate(el => {
-        return Array.from(el.children).some(child => 
-          child.tagName === 'I' && 
-          child.className.includes('icon') && 
-          child.textContent === 'download'
-        );
-      });
-      if (isDownload) {
-        downloadButton = button;
-        break;
-      }
-    }
-    console.log('found a download button');
+    return Effect.acquireUseRelease(
+      acquireBrowser,
+      (browser: Browser) => Effect.gen(function*(this: PixelDrainService) {
+        const page = yield* Effect.tryPromise({
+          try: () => browser.newPage(),
+          catch: (error) => new PixelDrainError({ url, error })
+        });
 
-    if (!downloadButton) {
-      throw new Error('No download button found');
-    }
-    const downloadUrl = await this.downloadCatcher(page, downloadButton);
-    if (!downloadUrl) {
-      throw new Error('No download url found');
-    }
-    await browser.close();
+        yield* Effect.tryPromise({
+          try: () => page.goto(url),
+          catch: (error) => new PixelDrainError({ url, error })
+        });
 
-    return [{ name: 'PIXELDRAIN', url: downloadUrl }];
+        const buttons = yield* Effect.tryPromise({
+          try: () => page.$$('button.button_highlight'),
+          catch: (error) => new PixelDrainError({ url, error })
+        });
+
+        if (buttons.length === 0) {
+          return yield* Effect.fail(new PixelDrainError({ url, error: 'No download button candidates found' }));
+        }
+        
+        let downloadButton: ElementHandle<Element> | undefined;
+        for (const button of buttons) {
+          const isDownload = yield* Effect.tryPromise({
+            try: () => button.evaluate(el => 
+              Array.from(el.children).some(child => 
+                child.tagName === 'I' && child.className.includes('icon') && child.textContent === 'download'
+              )
+            ),
+            catch: (error) => new PixelDrainError({ url, error })
+          });
+          if (isDownload) {
+            downloadButton = button;
+            break;
+          }
+        }
+        
+        if (!downloadButton) {
+          return yield* Effect.fail(new PixelDrainError({ url, error: 'No download button found' }));
+        }
+
+        const downloadUrl = yield* this.downloadCatcher(page, downloadButton);
+
+        if (!downloadUrl) {
+          return yield* Effect.fail(new PixelDrainError({ url, error: 'No download url found' }));
+        }
+
+        return [{ name: 'PIXELDRAIN', url: downloadUrl }];
+      }.bind(this)),
+      (browser) => Effect.promise(() => browser.close())
+    );
   }
 }

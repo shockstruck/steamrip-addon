@@ -1,41 +1,76 @@
-import axios from "axios";
-import { JSDOM } from "jsdom";
 import { DLService, PUPPETEER_OPTIONS } from "./BaseService";
 import puppeteer from "puppeteer-extra";
-import stealth from "puppeteer-extra-plugin-stealth";
-import adblock from "puppeteer-extra-plugin-adblocker";
-import type { Browser } from "puppeteer";
-import * as fs from "fs/promises";
+import { type Browser, type ElementHandle } from "puppeteer";
+import { Effect, pipe } from "effect";
+import { BuzzHeavierError, DownloadCatcherError } from "../errors";
 
 export default class BuzzheavierService extends DLService {
   public constructor() {
-    super('Buzzheavier', 10);
+    super('Buzzheavier', 6);
   }
-  async scrapeDownloadLinks(url: string) {
-    console.log('scraping download links');
-    const browser: Browser = await puppeteer.launch(PUPPETEER_OPTIONS);
-    const page = await browser.newPage();
-    await page.goto(url);
-    await page.evaluate(() => { (window as any).adLink = null; });
-    await page.waitForSelector('.link-button.gay-button');
-    // there are going to be 2 buttons, one for the download and one for previewing. we need to click the download button.
-    // we can do this by getting the hx-get attribute and seeing if it contains the word "download"
-    const potentialButtons = await page.$$('.link-button.gay-button');
-    const downloadButton = potentialButtons.find(button => button.evaluate(el => el.getAttribute('hx-get')?.includes('download')));
-    if (!downloadButton) {
-      console.log('uh oh')
-      throw new Error('No download button found');
-    }
 
-    const downloadUrl = await this.downloadCatcher(page, downloadButton);
+  scrapeDownloadLinks(url: string): Effect.Effect<{ name: string; url: string; }[], BuzzHeavierError | DownloadCatcherError> {
+    const acquireBrowser = Effect.tryPromise({
+      try: () => puppeteer.launch(PUPPETEER_OPTIONS),
+      catch: (error) => new BuzzHeavierError({ url, error })
+    });
 
-    if (!downloadUrl) {
-      throw new Error('No download url found');
-    }
-    await browser.close();
-    return [{
-      url: downloadUrl,
-      name: 'BUZZHEAVIER',
-    }];
+    return Effect.acquireUseRelease(
+      acquireBrowser,
+      (browser: Browser) => Effect.gen(function*(this: BuzzheavierService) {
+        const page = yield* Effect.tryPromise({
+          try: () => browser.newPage(),
+          catch: (error) => new BuzzHeavierError({ url, error })
+        });
+
+        yield* Effect.tryPromise({
+          try: () => page.goto(url),
+          catch: (error) => new BuzzHeavierError({ url, error })
+        });
+        
+        yield* Effect.tryPromise({
+          try: () => page.evaluate(() => { (window as any).adLink = null; }),
+          catch: (error) => new BuzzHeavierError({ url, error })
+        });
+
+        yield* Effect.tryPromise({
+          try: () => page.waitForSelector('.link-button.gay-button'),
+          catch: (error) => new BuzzHeavierError({ url, error })
+        });
+
+        const buttons = yield* Effect.tryPromise({
+          try: () => page.$$('.link-button.gay-button'),
+          catch: (error) => new BuzzHeavierError({ url, error })
+        });
+
+        let downloadButton: ElementHandle<Element> | undefined;
+        for (const button of buttons) {
+          const hxGet = yield* Effect.tryPromise({
+            try: () => button.evaluate(el => el.getAttribute('hx-get')),
+            catch: (error) => new BuzzHeavierError({ url, error })
+          });
+          if (hxGet?.includes('download')) {
+            downloadButton = button;
+            break;
+          }
+        }
+        
+        if (!downloadButton) {
+          return yield* Effect.fail(new BuzzHeavierError({ url, error: 'No download button found' }));
+        }
+
+        const downloadUrl = yield* this.downloadCatcher(page, downloadButton);
+
+        if (!downloadUrl) {
+          return yield* Effect.fail(new BuzzHeavierError({ url, error: 'No download url found' }));
+        }
+        
+        return [{
+          url: downloadUrl,
+          name: 'BUZZHEAVIER',
+        }];
+      }.bind(this)),
+      (browser) => Effect.promise(() => browser.close())
+    );
   }
 }
