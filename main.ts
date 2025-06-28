@@ -79,15 +79,11 @@ Effect.runSync(Effect.gen(function* () {
         catch: () => new Error('Failed to create task') // Define a specific error if needed
       });
       yield* Effect.sync(() => task.log('Implementing local catalog...'));
-      yield* Effect.tryPromise({
-        try: () => scraper.upgradeLocals(),
-        catch: (e) => e // Pass through the error
-      });
+      yield* scraper.upgradeLocals();
+
       yield* Effect.sync(() => task.log('Processing local catalog...'));
-      yield* Effect.tryPromise({
-        try: () => scraper.processLocals(),
-        catch: (e) => e // Pass through the error
-      });
+
+      yield* scraper.processLocals();
       search.addItems(scraper.catalog.games);
       yield* Effect.sync(() => task.finish());
     });
@@ -170,7 +166,7 @@ Effect.runSync(Effect.gen(function* () {
   addon.on('request-dl', (appid, info, event) => {
     event.defer();
 
-    const getDownloadLinks = Effect.tryPromise({
+    const getDownloadLinks = Effect.try({
       try: () => {
         const game = scraper.catalog.games.find(g => g.name === info.name);
         if (!game) throw new NoGameFoundError({ query: info.name });
@@ -179,7 +175,7 @@ Effect.runSync(Effect.gen(function* () {
       catch: (e) => e instanceof NoGameFoundError ? e : new ScrapeGameDownloadsError({ game: info.name })
     });
 
-    const findWorkingService = (links: { service: string; url: string }[]) => {
+    const findWorkingService = (links: { service: string; url: string }[]) => Effect.gen(function*() {
       const services = links
         .map(link => {
           const serviceName = getServiceNameFromUrl(link.url);
@@ -189,37 +185,49 @@ Effect.runSync(Effect.gen(function* () {
         .filter((s): s is { name: string; url: string; priority: number } => !!s.name)
         .sort((a, b) => b.priority - a.priority);
 
-      const serviceEffects = services.map(serviceInfo => Effect.gen(function*() {
-        console.log(`Trying service: ${serviceInfo.name}`);
-        let service = yield* getService(serviceInfo.name);
-        let currentUrl = serviceInfo.url;
+      return yield* Effect.forEach(services, serviceInfo =>
+        Effect.gen(function*() {
+          console.log(`Trying service: ${serviceInfo.name}`);
+          let service = yield* getService(serviceInfo.name);
+          let currentUrl = serviceInfo.url;
 
-        if (service instanceof FileCryptService) {
-          const fcResult = yield* service.scrapeDownloadLinks(currentUrl);
-          if (fcResult.length === 0 || !fcResult[0].url) {
-            return yield* Effect.fail(new Error("FileCrypt did not return a URL"));
+          if (service instanceof FileCryptService) {
+            const fcResult = yield* service.scrapeDownloadLinks(currentUrl);
+            if (fcResult.length === 0 || !fcResult[0].url) {
+              return yield* Effect.fail(new Error("FileCrypt did not return a URL"));
+            }
+            const nextServiceName = getServiceNameFromUrl(fcResult[0].url);
+            if (!nextServiceName) {
+              return yield* Effect.fail(new Error(`No service found for ${fcResult[0].url}`));
+            }
+            service = yield* getService(nextServiceName);
+            currentUrl = fcResult[0].url;
           }
-          const nextServiceName = getServiceNameFromUrl(fcResult[0].url);
-          if (!nextServiceName) {
-            return yield* Effect.fail(new Error(`No service found for ${fcResult[0].url}`));
+
+          const downloadUrls = yield* service.scrapeDownloadLinks(currentUrl);
+          if (downloadUrls.length > 0 && downloadUrls[0].url) {
+            return { url: downloadUrls[0].url, name: downloadUrls[0].name };
           }
-          service = yield* getService(nextServiceName);
-          currentUrl = fcResult[0].url;
-        }
-
-        const downloadUrls = yield* service.scrapeDownloadLinks(currentUrl);
-        if (downloadUrls.length > 0 && downloadUrls[0].url) {
-          return { url: downloadUrls[0].url, name: downloadUrls[0].name };
-        }
-        return yield* Effect.fail(new Error(`${service.name} returned no valid URLs`));
-      }));
-
-      return Effect.firstSuccessOf(serviceEffects);
-    };
+          return yield* Effect.fail(new Error(`${service.name} returned no valid URLs`));
+        }),
+        { concurrency: 1 }
+      ).pipe(
+        Effect.flatMap(results => {
+          // Find the first successful result (not an error)
+          const firstSuccess = results.find(r => !(r instanceof Error));
+          if (firstSuccess) {
+            return Effect.succeed(firstSuccess);
+          }
+          // If all failed, return the first error
+          const firstError = results.find(r => r instanceof Error);
+          return Effect.fail(firstError ?? new Error("No valid download links found"));
+        }),
+      );
+    });
 
     const requestDlEffect = Effect.gen(function*() {
       const links = yield* getDownloadLinks;
-      const downloadDetails = yield* findWorkingService(links);
+      const downloadDetails = yield* findWorkingService(yield* links);
 
       return {
         downloadType: 'direct',
@@ -234,11 +242,11 @@ Effect.runSync(Effect.gen(function* () {
       Effect.match({
         onFailure: (error) => {
           console.error("Failed to get download link:", error);
-          event.resolve([]);
+          event.fail('Failed to get download link');
         },
         onSuccess: (result) => {
           console.log("Success:", result);
-          event.resolve([result]);
+          event.resolve(result);
         }
       }),
       Effect.runPromise
