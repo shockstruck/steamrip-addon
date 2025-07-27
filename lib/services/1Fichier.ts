@@ -9,7 +9,7 @@ import type { EventResponse, SearchResult } from "ogi-addon";
 
 export default class FichierService extends DLService {
   public constructor() {
-    super('Fichier', 7);
+    super('Fichier', 10);
   }
 
   scrapeDownloadLinks(url: string, event: EventResponse<SearchResult>): Effect.Effect<{ name: string; url: string; }[], FichierError> {

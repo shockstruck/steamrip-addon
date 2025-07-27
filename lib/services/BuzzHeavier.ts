@@ -7,7 +7,7 @@ import type { EventResponse, SearchResult } from "ogi-addon";
 
 export default class BuzzheavierService extends DLService {
   public constructor() {
-    super('Buzzheavier', 8);
+    super('Buzzheavier', 7);
   }
 
   scrapeDownloadLinks(url: string, event: EventResponse<SearchResult>): Effect.Effect<{ name: string; url: string; }[], BuzzHeavierError | DownloadCatcherError> {
