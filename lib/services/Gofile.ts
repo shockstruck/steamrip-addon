@@ -9,7 +9,7 @@ import type { EventResponse, SearchResult } from "ogi-addon";
 
 export default class GofileService extends DLService {
   public constructor() {
-    super('Gofile', 8);
+    super('Gofile', 4);
   }
 
   scrapeDownloadLinks(url: string, event: EventResponse<SearchResult>): Effect.Effect<{ name: string; url: string; }[], GofilePasswordRequiredError | GofileScrapeError | DownloadCatcherError> {
