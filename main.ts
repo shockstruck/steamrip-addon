@@ -432,12 +432,21 @@ const program = Effect.gen(function* () {
 
       if (executables.length >= 0 && executables.length !== 1) {
         // match the input.executable to an actual path
-        input.executable = join(path, input.executable as string).split(path)[1];
+        input.executable = join(path, input.executable as string);
       }
 
       if (executables.length === 1) {
         input.executable = executables[0];
       }
+
+      // then remove the download path
+      yield* Effect.tryPromise({
+        try: async () => await fs.rm(join(path, file.name), { maxRetries: 3, retryDelay: 1000 }),
+        catch: () => {
+          console.log('Failed to auto remove download path', join(path, file.name));
+          return Effect.succeed(undefined);
+        }
+      });
 
       const response: Parameters<typeof event.resolve>[0] = {
         cwd: input.cwd as string,
