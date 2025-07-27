@@ -178,8 +178,6 @@ dist
 # Local files
 catalog.json
 
-# Demo files
-*.png
 
 # Links
 tests/LINKS.txt
