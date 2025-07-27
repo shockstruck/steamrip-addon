@@ -12,6 +12,8 @@ import { join } from "path";
 import { spawnSync } from "child_process";
 import * as fs from 'fs/promises';
 import type { Stats } from "fs";
+import axios from "axios";
+import { Stream } from "stream";
 
 const baseAddon = new OGIAddon({
   name: 'Steamrip Tool',
@@ -32,40 +34,102 @@ class AddonService extends Context.Tag('AddonService')<AddonService, {
 const addonService = Layer.succeed(AddonService, {
   addon: baseAddon,
   stringSimilarity: (a: string, b: string): number => {
-    a = a.toLowerCase();
-    b = b.toLowerCase();
-
-    // Return early for trivial equality
-    if (a === b) return 1;
-
-    // Create bigrams for each string
-    const bigrams = (str: string): string[] => {
-      const s = str.replace(/[^a-z0-9]+/g, ' '); // keep alphanumerics, replace others with space
-      const pairs: string[] = [];
-      for (let i = 0; i < s.length - 1; i++) {
-        pairs.push(s.substring(i, i + 2));
-      }
-      return pairs;
+    // Normalize and clean the strings
+    const normalize = (str: string): string => {
+      return str
+        .toLowerCase()
+        // Remove common download-related suffixes
+        .replace(/\s+(free\s+)?download.*$/i, '')
+        // Remove version patterns like (v1.2.3), [v1.2.3], etc.
+        .replace(/[\(\[\{]v?[\d\.]+[\)\]\}]/gi, '')
+        // Remove year patterns like (2023), [2024], etc.
+        .replace(/[\(\[\{]\d{4}[\)\]\}]/g, '')
+        // Remove edition suffixes but keep them for partial matching
+        .replace(/\s+(premium|deluxe|gold|ultimate|complete|goty|game\s+of\s+the\s+year|enhanced|definitive|remastered|directors?\s+cut)\s+(edition)?/gi, '')
+        // Clean up extra whitespace
+        .replace(/\s+/g, ' ')
+        .trim();
     };
 
-    const pairsA = bigrams(a);
-    const pairsB = bigrams(b);
+    const cleanA = normalize(a);
+    const cleanB = normalize(b);
 
-    if (pairsA.length === 0 || pairsB.length === 0) return 0;
+    // Return early for exact equality after normalization
+    if (cleanA === cleanB) return 1;
 
-    let intersection = 0;
-    const pairsBMutable = [...pairsB];
-    for (const pair of pairsA) {
-      const idx = pairsBMutable.indexOf(pair);
-      if (idx !== -1) {
-        intersection++;
-        pairsBMutable.splice(idx, 1); // remove to prevent double counting
+    // Split into words for word-level matching
+    const wordsA = cleanA.split(/\s+/).filter(word => word.length > 0);
+    const wordsB = cleanB.split(/\s+/).filter(word => word.length > 0);
+
+    if (wordsA.length === 0 || wordsB.length === 0) return 0;
+
+    // Calculate word-level similarity
+    let exactMatches = 0;
+    let partialMatches = 0;
+    const usedWordsB = new Set<number>();
+
+    for (const wordA of wordsA) {
+      let bestMatch = 0;
+      let bestMatchIndex = -1;
+
+      for (let i = 0; i < wordsB.length; i++) {
+        if (usedWordsB.has(i)) continue;
+
+        const wordB = wordsB[i];
+        
+        // Exact word match
+        if (wordA === wordB) {
+          exactMatches++;
+          usedWordsB.add(i);
+          bestMatchIndex = i;
+          break;
+        }
+
+        // Partial word match using character overlap
+        const overlap = calculateCharacterOverlap(wordA, wordB);
+        if (overlap > bestMatch && overlap > 0.6) {
+          bestMatch = overlap;
+          bestMatchIndex = i;
+        }
+      }
+
+      // If we found a good partial match and haven't used exact match
+      if (bestMatchIndex !== -1 && !usedWordsB.has(bestMatchIndex) && bestMatch > 0) {
+        partialMatches++;
+        usedWordsB.add(bestMatchIndex);
       }
     }
 
-    return (2 * intersection) / (pairsA.length + pairsB.length);
+    // Calculate similarity score
+    // Give more weight to exact matches, some weight to partial matches
+    const totalWords = Math.max(wordsA.length, wordsB.length);
+    const exactScore = exactMatches / totalWords;
+    const partialScore = (partialMatches * 0.7) / totalWords;
+    
+    return Math.min(1, exactScore + partialScore);
+
+    function calculateCharacterOverlap(str1: string, str2: string): number {
+      if (str1.length < 2 || str2.length < 2) return str1 === str2 ? 1 : 0;
+      
+      const bigrams1 = new Set<string>();
+      const bigrams2 = new Set<string>();
+      
+      for (let i = 0; i < str1.length - 1; i++) {
+        bigrams1.add(str1.substring(i, i + 2));
+      }
+      
+      for (let i = 0; i < str2.length - 1; i++) {
+        bigrams2.add(str2.substring(i, i + 2));
+      }
+      
+      const intersection = [...bigrams1].filter(bg => bigrams2.has(bg)).length;
+      const union = bigrams1.size + bigrams2.size - intersection;
+      
+      return union > 0 ? intersection / union : 0;
+    }
   }
 });
+
 
 const program = Effect.gen(function* () {
   puppeteer.use(stealth());
@@ -132,8 +196,9 @@ const program = Effect.gen(function* () {
         }
       }
 
+
       // Require a minimum similarity to consider it a valid match
-      const SIMILARITY_THRESHOLD = 0.3;
+      const SIMILARITY_THRESHOLD = 0.4;
       console.log("Best score", bestScore);
       const game = bestScore >= SIMILARITY_THRESHOLD ? bestMatch : undefined;
 
@@ -216,24 +281,63 @@ const program = Effect.gen(function* () {
             let currentUrl = serviceInfo.url;
 
             if (service instanceof FileCryptService) {
-              const fcResult = yield* service.scrapeDownloadLinks(currentUrl, event);
+              const fcResult = yield* pipe(
+                service.scrapeDownloadLinks(currentUrl, event),
+                Effect.catchAll(e => Effect.succeed([]))
+              )
               if (fcResult.length === 0 || !fcResult[0].url) {
-                throw new FileCryptError({ url: currentUrl, error: new Error('FileCrypt did not return a URL') });
+                // throw new FileCryptError({ url: currentUrl, error: new Error('FileCrypt did not return a URL') });
+                console.log('FileCrypt did not return a URL', fcResult);
+                continue;
               }
               const nextServiceName = getServiceNameFromUrl(fcResult[0].url);
               if (!nextServiceName) {
-                throw new NoServiceFoundError();
+                console.log('No service found', fcResult[0].url);
+                continue;
               }
               service = yield* getService(nextServiceName);
               currentUrl = fcResult[0].url;
             }
 
-            const downloadUrls = yield* service.scrapeDownloadLinks(currentUrl, event);
-            if (downloadUrls.length > 0 && downloadUrls[0].url) {
-              // Found a working service, break out
-              return { url: downloadUrls[0].url, name: downloadUrls[0].name };
+            const downloadUrls = yield* pipe(
+              service.scrapeDownloadLinks(currentUrl, event),
+              Effect.catchAll(e => Effect.succeed([]))
+            ); 
+            console.log('download found', downloadUrls);
+            // test the download links to see if we can get a 200 response
+            let linksGood = true;
+            for (const downloadUrl of downloadUrls) {
+              const response = yield* Effect.tryPromise({
+                try: async () => await axios<Stream.Readable>(downloadUrl.url, {
+                  responseType: 'stream',
+                  headers: {
+                    'User-Agent': 'OpenGameLauncher/1.0'
+                  }
+                }),
+                catch: (err) => {
+                  console.log('Error', err);
+                  return Effect.succeed(undefined);
+                }
+              });
+              console.log('Response', response.status);
+
+              response.data.destroy();
+              if (response?.status !== 200) {
+                linksGood = false;
+                break;
+              }
             }
-            throw new NoDownloadFoundError();
+
+            if (!linksGood) {
+              console.log('No working links found', downloadUrls);
+              continue;
+            }
+            if (downloadUrls.length === 0) {
+              console.log('No download urls found', downloadUrls);
+              continue;
+            }
+            // Found a working service, break out
+            return { url: downloadUrls[0].url, name: downloadUrls[0].name };
           } catch (err) {
             lastError = err;
             // Continue to next service
@@ -280,6 +384,10 @@ const program = Effect.gen(function* () {
       const file = multiPartFiles?.[0];
       if (!file) return yield* Effect.fail(new NoFileFoundError());
 
+      const showErrorScreen = async () => {
+        await event.askForInput('Error', 'Oops! It seems like this game wans\'t downloaded correctly. Go to the path: "' + path + '" and delete the file to try again. It is likely that this game is hosted on a service that is not currently working. Stay subscribed to the thread to get notified when it is fixed.', new ConfigurationBuilder())
+      }
+
       // now, inferring that it's a rar file, we need to extract it to the "path" folder
       // use 7zip in the program files if this is a windows machine
 
@@ -290,9 +398,11 @@ const program = Effect.gen(function* () {
           `-o${path}` // output directory
         ], { stdio: 'inherit' });
         if (result.error) {
+          yield* Effect.promise(async () => showErrorScreen());
           return yield* Effect.fail(new RarExtractionError({ path, error: result.error.message }));
         }
         if (result.status !== 0) {
+          yield* Effect.promise(async () => showErrorScreen());
           return yield* Effect.fail(new RarExtractionError({ path, error: `7z extraction failed with code ${result.status}` }));
         }
       }
@@ -304,9 +414,11 @@ const program = Effect.gen(function* () {
           `${path}` // output directory
         ], { stdio: 'inherit' });
         if (result.error) {
+          yield* Effect.promise(async () => showErrorScreen());
           return yield* Effect.fail(new RarExtractionError({ path, error: result.error.message }));
         }
         if (result.status !== 0) {
+          yield* Effect.promise(async () => showErrorScreen());
           return yield* Effect.fail(new RarExtractionError({ path, error: `unrar extraction failed with code ${result.status}` }));
         }
       }

@@ -24,6 +24,8 @@ export default class GofileService extends DLService {
     return Effect.acquireUseRelease(
       acquireBrowser,
       (browser: Browser) => Effect.gen(function*(this: GofileService) {
+        // for now gofile is not working, so we return an empty array
+
         const page: Page = yield* Effect.tryPromise({
           try: () => browser.newPage(),
           catch: (error) => new GofileScrapeError({ url, error })

@@ -60,10 +60,19 @@ export default class BuzzheavierService extends DLService {
           return yield* Effect.fail(new BuzzHeavierError({ url, error: 'No download button found' }));
         }
 
-        const downloadUrl = yield* this.downloadCatcher(page, downloadButton);
+        let downloadUrl: string | undefined;
+        let lastError: unknown = undefined;
+        for (let attempt = 0; attempt < 5; attempt++) {
+          try {
+            downloadUrl = yield* this.downloadCatcher(page, downloadButton);
+            if (downloadUrl) break;
+          } catch (err) {
+            lastError = err;
+          }
+        }
 
         if (!downloadUrl) {
-          return yield* Effect.fail(new BuzzHeavierError({ url, error: 'No download url found' }));
+          return yield* Effect.fail(new BuzzHeavierError({ url, error: lastError ?? 'No download url found' }));
         }
         
         return [{
