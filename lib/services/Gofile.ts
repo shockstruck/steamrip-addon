@@ -5,13 +5,14 @@ import adblock from "puppeteer-extra-plugin-adblocker";
 import { Effect } from "effect";
 import { GofilePasswordRequiredError, GofileScrapeError, DownloadCatcherError } from "../errors";
 import type { Browser, Page, ElementHandle } from "puppeteer";
+import type { EventResponse, SearchResult } from "ogi-addon";
 
 export default class GofileService extends DLService {
   public constructor() {
-    super('Gofile', 5);
+    super('Gofile', 8);
   }
 
-  scrapeDownloadLinks(url: string): Effect.Effect<{ name: string; url: string; }[], GofilePasswordRequiredError | GofileScrapeError | DownloadCatcherError> {
+  scrapeDownloadLinks(url: string, event: EventResponse<SearchResult>): Effect.Effect<{ name: string; url: string; }[], GofilePasswordRequiredError | GofileScrapeError | DownloadCatcherError> {
     puppeteer.use(stealth());
     puppeteer.use(adblock());
 

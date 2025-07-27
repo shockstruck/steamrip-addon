@@ -2,6 +2,7 @@ import { Effect } from "effect";
 import type { ElementHandle, Page } from "puppeteer";
 import puppeteer, { type VanillaPuppeteer } from "puppeteer-extra";
 import { DownloadCatcherError } from "../errors";
+import type { EventResponse, SearchResult } from "ogi-addon";
 export const PUPPETEER_OPTIONS: Parameters<VanillaPuppeteer["launch"]>[0] = {
   headless: true,
   args: [
@@ -21,7 +22,12 @@ export class DLService {
     this.name = name;
     this.priority = priority;
   }
-  scrapeDownloadLinks(url: string): Effect.Effect<{ name: string, url: string }[], Error> {
+
+  isCaptchaBased(): boolean {
+    return false;
+  }
+
+  scrapeDownloadLinks(url: string, event: EventResponse<SearchResult>): Effect.Effect<{ name: string, url: string }[], Error> {
     return Effect.die(new Error('Not implemented'));
   }
 

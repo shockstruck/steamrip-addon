@@ -77,3 +77,16 @@ export class NetworkError extends Data.TaggedError('NetworkError')<{
   url: string;
   error: unknown;
 }> {}
+export class NoDownloadFoundError extends Data.TaggedError('NoDownloadFoundError')<{}> {}
+export class NoFileFoundError extends Data.TaggedError('NoFileFoundError')<{}> {}
+export class RarExtractionError extends Data.TaggedError('RarExtractionError')<{
+  path: string;
+  error: string;
+}> {}
+export class InputError extends Data.TaggedError('InputError')<{
+  error: string;
+}> {}
+export class CommonRedistError extends Data.TaggedError('CommonRedistError')<{
+  path: string;
+  error: string;
+}> {}

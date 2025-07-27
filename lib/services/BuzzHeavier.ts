@@ -3,13 +3,14 @@ import puppeteer from "puppeteer-extra";
 import { type Browser, type ElementHandle } from "puppeteer";
 import { Effect, pipe } from "effect";
 import { BuzzHeavierError, DownloadCatcherError } from "../errors";
+import type { EventResponse, SearchResult } from "ogi-addon";
 
 export default class BuzzheavierService extends DLService {
   public constructor() {
-    super('Buzzheavier', 6);
+    super('Buzzheavier', 7);
   }
 
-  scrapeDownloadLinks(url: string): Effect.Effect<{ name: string; url: string; }[], BuzzHeavierError | DownloadCatcherError> {
+  scrapeDownloadLinks(url: string, event: EventResponse<SearchResult>): Effect.Effect<{ name: string; url: string; }[], BuzzHeavierError | DownloadCatcherError> {
     const acquireBrowser = Effect.tryPromise({
       try: () => puppeteer.launch(PUPPETEER_OPTIONS),
       catch: (error) => new BuzzHeavierError({ url, error })

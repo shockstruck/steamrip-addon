@@ -5,13 +5,14 @@ import stealth from "puppeteer-extra-plugin-stealth";
 import adblock from "puppeteer-extra-plugin-adblocker";
 import { Effect } from "effect";
 import { FichierError } from "../errors";
+import type { EventResponse, SearchResult } from "ogi-addon";
 
 export default class FichierService extends DLService {
   public constructor() {
-    super('Fichier', 4);
+    super('Fichier', 7);
   }
 
-  scrapeDownloadLinks(url: string): Effect.Effect<{ name: string; url: string; }[], FichierError> {
+  scrapeDownloadLinks(url: string, event: EventResponse<SearchResult>): Effect.Effect<{ name: string; url: string; }[], FichierError> {
     puppeteer.use(stealth());
     puppeteer.use(adblock());
 

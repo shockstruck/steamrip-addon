@@ -3,13 +3,14 @@ import { type Browser, type ElementHandle } from "puppeteer";
 import { DLService, PUPPETEER_OPTIONS } from "./BaseService";
 import { Effect } from "effect";
 import { PixelDrainError, DownloadCatcherError } from "../errors";
+import type { EventResponse, SearchResult } from "ogi-addon";
 
 export default class PixelDrainService extends DLService {
   public constructor() {
-    super('PixelDrain', 3);
+    super('PixelDrain', 8);
   }
 
-  scrapeDownloadLinks(url: string): Effect.Effect<{ name: string; url: string; }[], PixelDrainError | DownloadCatcherError> {
+  scrapeDownloadLinks(url: string, event: EventResponse<SearchResult>): Effect.Effect<{ name: string; url: string; }[], PixelDrainError | DownloadCatcherError> {
     const acquireBrowser = Effect.tryPromise({
       try: () => puppeteer.launch(PUPPETEER_OPTIONS),
       catch: (error) => new PixelDrainError({ url, error })

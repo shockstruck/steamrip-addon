@@ -7,6 +7,7 @@ import FileCryptService from "./FileCrypt";
 import GofileService from "./Gofile";
 import { Effect } from "effect";
 import { InvalidUrlError, NoServiceFoundError, UnknownServiceError } from "../errors";
+import PixelDrainService from "./PixelDrain";
 
 export const getService = (name: string) => Effect.gen(function*() {
   switch (name) {
@@ -18,6 +19,8 @@ export const getService = (name: string) => Effect.gen(function*() {
       return yield* Effect.succeed(new FileCryptService());
     case 'Gofile':
       return yield* Effect.succeed(new GofileService());
+    case 'PixelDrain':
+      return yield* Effect.succeed(new PixelDrainService());
     default:
       return yield* Effect.fail(new UnknownServiceError({ name }));
   }
@@ -78,6 +81,9 @@ export function getServiceNameFromUrl(url: string): string | null {
 
     if (hostname.includes('gofile')) {
       return 'Gofile';
+    }
+    if (hostname.includes('pixeldrain')) {
+      return 'PixelDrain';
     }
     
     return null;

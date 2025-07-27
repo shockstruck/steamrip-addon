@@ -78,7 +78,6 @@ export function processFilecryptUrl(url: string, options: FilecryptOptions = {})
   });
 
   return Effect.gen(function*() {
-    yield* showFilecryptInfoPopup(url);
     console.log(`[filecrypt] Processing filecrypt URL: ${url}`);
     
     return yield* Effect.acquireUseRelease(

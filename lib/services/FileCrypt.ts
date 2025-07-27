@@ -2,14 +2,25 @@ import { DLService } from "./BaseService";
 import { isFilecryptUrl, processFilecryptUrl } from "../filecrypt";
 import { Effect } from "effect";
 import { FileCryptError, FileCryptUrlError } from "../errors";
+import { ConfigurationBuilder, type EventResponse, type SearchResult } from "ogi-addon";
 
 export default class FileCryptService extends DLService {
   public constructor() {
-    super('FileCrypt', 8); // High priority since it's a link redirector
+    super('FileCrypt', 3); // High priority since it's a link redirector
   }
 
-  scrapeDownloadLinks(url: string) {
+  isCaptchaBased(): boolean {
+    return true;
+  }
+
+  scrapeDownloadLinks(url: string, event: EventResponse<SearchResult>): Effect.Effect<{ name: string; url: string; }[], Error> {
     return Effect.gen(function*() {
+      yield* Effect.promise(() => event.askForInput(
+        'Captcha Notice',
+        'The site you are about to access requires a captcha to be solved. A browser window will open to solve it. Once solved, click on the download link and our system should detect completion and close the window.',
+        new ConfigurationBuilder())
+      );
+
       if (!isFilecryptUrl(url)) {
         return yield* Effect.fail(new FileCryptUrlError({ url }));
       }
