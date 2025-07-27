@@ -356,8 +356,9 @@ const program = Effect.gen(function* () {
 
       // now it's time to build the ui for the setup
       const inputAsk = new ConfigurationBuilder()
-
-      if (hasCommonRedist) {
+      let addedInput = false;
+      if (hasCommonRedist && process.platform === 'win32') {
+        addedInput = true;
         inputAsk.addBooleanOption(option => 
           option.setName('runCommonRedist')
             .setDisplayName('Run Common Redistributables')
@@ -366,6 +367,7 @@ const program = Effect.gen(function* () {
         );
       }
       if (!autoFoundGameFolder) {
+        addedInput = true;
         inputAsk.addStringOption(option => 
           option.setName('cwd')
             .setDisplayName('Game Folder')
@@ -375,6 +377,7 @@ const program = Effect.gen(function* () {
         );
       }
       if (executables.length >= 0 && executables.length !== 1) {
+        addedInput = true;
         if (executables.length > 1) {
           inputAsk.addStringOption(option => 
             option.setName('executable')
@@ -395,11 +398,13 @@ const program = Effect.gen(function* () {
           );
         }
       }
-
-      const input = yield* Effect.tryPromise({
-        try: async () => await event.askForInput('Setup your Game', 'Setup your new game', inputAsk),
-        catch: () => Effect.fail(new InputError({ error: 'Failed to ask for input' }))
-      });
+      let input: {[ key: string ]: string | boolean | number } = {};
+      if (addedInput) {
+        input = yield* Effect.tryPromise({
+          try: async () => await event.askForInput('Setup your Game', 'Setup your new game', inputAsk),
+          catch: () => Effect.fail(new InputError({ error: 'Failed to ask for input' }))
+        });
+      }
 
       // if the 'run common redist' is true, we need to run the common redistributables
       if (input.runCommonRedist) {
