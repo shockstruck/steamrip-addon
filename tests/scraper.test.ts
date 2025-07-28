@@ -15,6 +15,7 @@ puppeteer.use(stealth());
 puppeteer.use(adblock());
 
 type ValidLink = 'steamrip' | 'buzzheavier' | '1fichier' | 'pixeldrain' | 'gofile' | 'filecrypt-test';
+const emptyEvent = new EventResponse<SearchResult>((_, _1, _2) => Promise.resolve({}));
 export async function getLinks() {
   // get links from LINKS.txt
 
@@ -31,7 +32,7 @@ const linksMap = await getLinks();
 describe('Steamrip', () => {
   it('can scrape all links and provide the correct values', async () => {
     const scraper = new Scraper();
-    const links = await scraper.scrapeAllLinks();
+    const links = await Effect.runPromise(scraper.scrapeAllLinks());
     expect(links).toBeDefined();
     expect(links.length).toBeGreaterThan(0);
 
@@ -43,7 +44,7 @@ describe('Steamrip', () => {
 
   it('can scrape game downloads and provide the correct values', async () => {
     const scraper = new Scraper();
-    const links = await scraper.scrapeGameDownloads(linksMap.steamrip);
+    const links = await Effect.runPromise(scraper.scrapeGameDownloads(linksMap.steamrip));
     expect(links).toBeDefined();
     expect(links.length).toBeGreaterThan(0);
   });
@@ -52,7 +53,7 @@ describe('Steamrip', () => {
 describe('Buzzheavier', () => {
   it('can scrape download links', async () => {
     const service = new BuzzHeavierService();
-    const links = await service.scrapeDownloadLinks(linksMap.buzzheavier);
+    const links = await Effect.runPromise(service.scrapeDownloadLinks(linksMap.buzzheavier, emptyEvent));
     expect(links).toBeDefined();
     expect(links.length).toBeGreaterThan(0);
 
@@ -66,11 +67,16 @@ describe('Buzzheavier', () => {
 import FichierService from '../lib/services/1Fichier';
 import PixelDrainService from '../lib/services/PixelDrain';
 import GofileService from '../lib/services/Gofile';
+import { EventResponse } from 'ogi-addon';
+import type { SearchResult } from 'ogi-addon';
+import { Effect } from 'effect';
+import axios from 'axios';
+import { createWriteStream } from 'fs';
 
 describe('FichierService', () => {
   it('can scrape download links from 1fichier', async () => {
     const service = new FichierService();
-    const links = await service.scrapeDownloadLinks(linksMap['1fichier']);
+    const links = await Effect.runPromise(service.scrapeDownloadLinks(linksMap['1fichier'], emptyEvent));
 
     expect(links).toBeDefined();
     expect(links.length).toBeGreaterThan(0);
@@ -87,7 +93,7 @@ describe('FichierService', () => {
 describe('PixelDrain', () => {
   it('can scrape download links from pixeldrain', async () => {
     const service = new PixelDrainService();
-    const links = await service.scrapeDownloadLinks(linksMap.pixeldrain);
+    const links = await Effect.runPromise(service.scrapeDownloadLinks(linksMap.pixeldrain, emptyEvent));
     expect(links).toBeDefined();
     expect(links.length).toBeGreaterThan(0);
 
@@ -102,8 +108,48 @@ describe('PixelDrain', () => {
 describe('Gofile', () => {
   it('can scrape download links from gofile', async () => {
     const service = new GofileService();
-    const links = await service.scrapeDownloadLinks(linksMap.gofile);
+    const links = await Effect.runPromise(service.scrapeDownloadLinks(linksMap.gofile, emptyEvent));
     expect(links).toBeDefined();
     expect(links.length).toBeGreaterThan(0);
+
+    // try and start a download with the headers provided adn the url
+    const download = await axios.get(links[0].url, {
+      headers: links[0].headers,
+      responseType: 'stream'
+    });
+    console.log('Download', download.status);
+    expect(download.status).toBe(200);
+    // download to ./test-file.rar
+    const stream = createWriteStream('./test-file.rar');
+    download.data.pipe(stream);
+    await new Promise<void>((resolve, reject) => {
+      const contentLength = download.headers['content-length'];
+      const contentLengthMB = contentLength ? (Number(contentLength) / (1024 * 1024)).toFixed(2) : 'unknown';
+      console.log(`Downloading... Content-Length: ${contentLength} bytes (${contentLengthMB} MB)`);
+      // get the expected file size, and if it's already greater than that, then we can just resolve
+      const expectedFileSize = contentLength;
+      if (expectedFileSize && stream.bytesWritten >= expectedFileSize) {
+        console.log('File verified as good, skipping download', expectedFileSize, stream.bytesWritten);
+        download.data.destroy();
+        resolve();
+        return;
+      }
+      stream.on('finish', () => {
+        console.log('Download finished');
+        // read the file size and expect it to be greater than 6 mb
+        const fileSize = Bun.file('./test-file.rar').size;
+        expect(fileSize).toBeGreaterThan(6 * 1024 * 1024);
+        resolve();
+      });
+      stream.on('data', () => {
+        console.log('Progressing through download...')
+      });
+      stream.on('error', (error) => {
+        console.error('Download error', error);
+        reject(error);
+      });
+    });
+
+    console.log('Download finished');
   }, Number.MAX_SAFE_INTEGER);
 });

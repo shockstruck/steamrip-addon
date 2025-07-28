@@ -9,10 +9,10 @@ import type { EventResponse, SearchResult } from "ogi-addon";
 
 export default class FichierService extends DLService {
   public constructor() {
-    super('Fichier', 10);
+    super('Fichier', 9);
   }
 
-  scrapeDownloadLinks(url: string, event: EventResponse<SearchResult>): Effect.Effect<{ name: string; url: string; }[], FichierError> {
+  scrapeDownloadLinks(url: string, event: EventResponse<SearchResult>): Effect.Effect<{ name: string; url: string; headers: Record<string, string> }[], FichierError> {
     puppeteer.use(stealth());
     puppeteer.use(adblock());
 
@@ -128,7 +128,7 @@ export default class FichierService extends DLService {
           });
           if (href) {
             console.log('found ok button', href);
-            return [{ url: href, name: '1FICHIER' }];
+            return [{ url: href, name: '1FICHIER', headers: {} }];
           }
         }
 

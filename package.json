@@ -7,7 +7,7 @@
     "axios": "^1.10.0",
     "effect": "^3.16.10",
     "jsdom": "^26.1.0",
-    "ogi-addon": "^1.5.0",
+    "ogi-addon": "^1.5.1",
     "puppeteer": "^24.10.1",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-adblocker": "^2.13.6",

@@ -1,111 +1,210 @@
-import puppeteer from "puppeteer-extra";
-import { DLService, PUPPETEER_OPTIONS } from "./BaseService";
-import stealth from "puppeteer-extra-plugin-stealth";
-import adblock from "puppeteer-extra-plugin-adblocker";
+import { DLService } from "./BaseService";
 import { Effect } from "effect";
-import { GofilePasswordRequiredError, GofileScrapeError, DownloadCatcherError } from "../errors";
-import type { Browser, Page, ElementHandle } from "puppeteer";
+import { GofilePasswordRequiredError, GofileScrapeError } from "../errors";
 import type { EventResponse, SearchResult } from "ogi-addon";
 
+interface GofileApiResponse {
+  status: string;
+  data: {
+    token?: string;
+    id?: string;
+    type?: string;
+    name?: string;
+    link?: string;
+    children?: Record<string, GofileContent>;
+    password?: string;
+    passwordStatus?: string;
+  };
+}
+
+interface GofileContent {
+  id: string;
+  type: 'file' | 'folder';
+  name: string;
+  link?: string;
+  children?: Record<string, GofileContent>;
+}
+
 export default class GofileService extends DLService {
+  private authToken: string | null = null;
+
   public constructor() {
-    super('Gofile', 3);
+    super('Gofile', 10);
   }
 
-  scrapeDownloadLinks(url: string, event: EventResponse<SearchResult>): Effect.Effect<{ name: string; url: string; }[], GofilePasswordRequiredError | GofileScrapeError | DownloadCatcherError> {
-    puppeteer.use(stealth());
-    puppeteer.use(adblock());
+  scrapeDownloadLinks(
+    url: string,
+    event: EventResponse<SearchResult>
+  ): Effect.Effect<
+    { name: string; url: string; headers: Record<string, string> }[],
+    GofilePasswordRequiredError | GofileScrapeError
+  > {
+    return Effect.gen(function* (this: GofileService) {
+      // Extract content ID from URL
+      const contentId = yield* this.extractContentId(url);
+      
+      // Get auth token
+      yield* this.setAccountAccessToken();
+      
+      // Build file structure and collect download links
+      const files = yield* this.buildContentStructure(contentId, url);
+      
+      return files;
+    }.bind(this));
+  }
 
-    const acquireBrowser = Effect.tryPromise({
-      try: () => puppeteer.launch(PUPPETEER_OPTIONS),
+  private extractContentId(url: string): Effect.Effect<string, GofileScrapeError> {
+    return Effect.try({
+      try: () => {
+        const urlParts = url.split('/');
+        if (urlParts.length < 2 || urlParts[urlParts.length - 2] !== 'd') {
+          throw new Error(`The url probably doesn't have an id in it: ${url}`);
+        }
+        return urlParts[urlParts.length - 1];
+      },
       catch: (error) => new GofileScrapeError({ url, error })
     });
+  }
 
-    return Effect.acquireUseRelease(
-      acquireBrowser,
-      (browser: Browser) => Effect.gen(function*(this: GofileService) {
-        // for now gofile is not working, so we return an empty array
+  private setAccountAccessToken(token?: string): Effect.Effect<void, GofileScrapeError> {
+    return Effect.gen(function* (this: GofileService) {
+      if (token) {
+        this.authToken = token;
+        return;
+      }
 
-        const page: Page = yield* Effect.tryPromise({
-          try: () => browser.newPage(),
-          catch: (error) => new GofileScrapeError({ url, error })
+      const response = yield* Effect.tryPromise({
+        try: () => fetch('https://api.gofile.io/accounts', {
+          method: 'POST',
+          headers: {
+            'Accept': '*/*',
+            'User-Agent': 'Mozilla/5.0',
+            'Connection': 'keep-alive',
+            'Accept-Encoding': 'gzip'
+          }
+        }),
+        catch: (error) => new GofileScrapeError({ url: 'https://api.gofile.io/accounts', error })
+      });
+
+      const data = yield* Effect.tryPromise({
+        try: () => response.json() as Promise<GofileApiResponse>,
+        catch: (error) => new GofileScrapeError({ url: 'https://api.gofile.io/accounts', error })
+      });
+
+      if (data.status !== 'ok' || !data.data.token) {
+        return yield* Effect.fail(new GofileScrapeError({ 
+          url: 'https://api.gofile.io/accounts', 
+          error: new Error('Account creation failed!') 
+        }));
+      }
+
+      this.authToken = data.data.token;
+    }.bind(this));
+  }
+
+  private buildContentStructure(
+    contentId: string, 
+    originalUrl: string, 
+    password?: string
+  ): Effect.Effect<
+    { name: string; url: string; headers: Record<string, string> }[],
+    GofilePasswordRequiredError | GofileScrapeError
+  > {
+    return Effect.gen(function* (this: GofileService) {
+      const files: { name: string; url: string; headers: Record<string, string> }[] = [];
+      
+      yield* this.collectFiles(contentId, originalUrl, files, password);
+      
+      return files;
+    }.bind(this));
+  }
+
+  private collectFiles(
+    contentId: string,
+    originalUrl: string,
+    files: { name: string; url: string; headers: Record<string, string> }[],
+    password?: string
+  ): Effect.Effect<void, GofilePasswordRequiredError | GofileScrapeError> {
+    return Effect.gen(function* (this: GofileService) {
+      let apiUrl = `https://api.gofile.io/contents/${contentId}?wt=4fd6sg89d7s6&cache=true&sortField=createTime&sortDirection=1`;
+      
+      if (password) {
+        // Hash the password like in the Python version
+        const encoder = new TextEncoder();
+        const data = encoder.encode(password);
+        const hashBuffer = yield* Effect.tryPromise({
+          try: () => crypto.subtle.digest('SHA-256', data),
+          catch: (error) => new GofileScrapeError({ url: originalUrl, error })
         });
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        const hashedPassword = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+        apiUrl += `&password=${hashedPassword}`;
+      }
 
-        yield* Effect.tryPromise({
-          try: () => page.goto(url, { waitUntil: 'networkidle2' }),
-          catch: (error) => new GofileScrapeError({ url, error })
+      const headers: Record<string, string> = {
+        'Accept': '*/*',
+        'User-Agent': 'Mozilla/5.0',
+        'Connection': 'keep-alive',
+        'Accept-Encoding': 'gzip'
+      };
+
+      if (this.authToken) {
+        headers['Cookie'] = `accountToken=${this.authToken}`;
+        headers['Authorization'] = `Bearer ${this.authToken}`;
+      }
+
+      const response = yield* Effect.tryPromise({
+        try: () => fetch(apiUrl, { headers }),
+        catch: (error) => new GofileScrapeError({ url: originalUrl, error })
+      });
+
+      const data = yield* Effect.tryPromise({
+        try: () => response.json() as Promise<GofileApiResponse>,
+        catch: (error) => new GofileScrapeError({ url: originalUrl, error })
+      });
+
+      if (data.status !== 'ok') {
+        return yield* Effect.fail(new GofileScrapeError({ 
+          url: originalUrl, 
+          error: new Error(`Failed to fetch data from ${apiUrl}`) 
+        }));
+      }
+
+      // Check for password protection
+      if (data.data.password && data.data.passwordStatus !== 'passwordOk') {
+        return yield* Effect.fail(new GofilePasswordRequiredError({ url: originalUrl }));
+      }
+
+      // If it's a file, add it to the collection
+      if (data.data.type !== 'folder' && data.data.link) {
+        files.push({
+          name: data.data.name || 'unknown',
+          url: data.data.link,
+          headers: this.authToken ? {
+            'Cookie': `accountToken=${this.authToken}`,
+            'Authorization': `Bearer ${this.authToken}`
+          } : {}
         });
+        return;
+      }
 
-        yield* Effect.tryPromise({
-          try: () => page.waitForSelector('#filemanager_itemslist', { timeout: 10000 }),
-          catch: (error) => new GofileScrapeError({ url, error })
-        });
-
-        const passwordForm: ElementHandle<Element> | null = yield* Effect.tryPromise({
-          try: () => page.$('#filemanager_alert_passwordform'),
-          catch: (error) => new GofileScrapeError({ url, error })
-        });
-
-        if (passwordForm) {
-          const isVisible: boolean = yield* Effect.tryPromise({
-            try: () => page.evaluate((el: Element) => !el.classList.contains('hidden'), passwordForm),
-            catch: (error) => new GofileScrapeError({ url, error })
-          });
-          if (isVisible) {
-            return yield* Effect.fail(new GofilePasswordRequiredError({ url }));
+      // If it's a folder, process children
+      if (data.data.children) {
+        for (const child of Object.values(data.data.children)) {
+          if (child.type === 'folder') {
+            yield* this.collectFiles(child.id, originalUrl, files, password);
+          } else if (child.link) {
+            files.push({
+              name: child.name,
+              url: child.link,
+              headers: this.authToken ? {
+                'Cookie': `accountToken=${this.authToken}`,
+                'Authorization': `Bearer ${this.authToken}`
+              } : {}
+            });
           }
         }
-
-        yield* Effect.tryPromise({
-          try: () => page.waitForSelector('.item_download', { timeout: 5000 }),
-          catch: (error) => new GofileScrapeError({ url, error })
-        });
-        
-        const fileItems: { name: string, downloadButtonIndex: number }[] = yield* Effect.tryPromise({
-          try: () => page.evaluate(() => {
-            const items: { name: string, downloadButtonIndex: number }[] = [];
-            const fileElements = document.querySelectorAll('[data-item-id]');
-            
-            fileElements.forEach((element, index) => {
-              const nameElement = element.querySelector('.item_open') as HTMLElement;
-              if (nameElement) {
-                const fileName = nameElement.textContent?.trim() || `file_${index}`;
-                const downloadButton = element.querySelector('.item_download');
-                if (downloadButton) {
-                  items.push({ name: fileName, downloadButtonIndex: index });
-                }
-              }
-            });
-            
-            return items;
-          }),
-          catch: (error) => new GofileScrapeError({ url, error })
-        });
-
-        const downloadResults = yield* Effect.forEach(fileItems, (fileItem) => Effect.gen(function*(this: GofileService) {
-          const downloadButtons = yield* Effect.tryPromise({
-            try: () => page.$$('.item_download'),
-            catch: (error) => new GofileScrapeError({ url, error })
-          });
-
-          if (downloadButtons[fileItem.downloadButtonIndex]) {
-            const downloadUrl = yield* this.downloadCatcher(page, downloadButtons[fileItem.downloadButtonIndex]);
-            if (downloadUrl) {
-              return {
-                name: fileItem.name,
-                url: downloadUrl
-              };
-            }
-          }
-          return undefined;
-        }.bind(this)), { concurrency: "inherit" });
-        
-        const filteredResults = downloadResults.filter((result): result is { name: string; url: string } => !!result);
-
-        console.log("Download results", filteredResults);
-        return filteredResults;
-      }.bind(this)),
-      (browser) => Effect.promise(() => browser.close())
-    );
+      }
+    }.bind(this));
   }
 }

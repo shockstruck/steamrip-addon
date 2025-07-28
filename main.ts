@@ -306,27 +306,27 @@ const program = Effect.gen(function* () {
             console.log('download found', downloadUrls);
             // test the download links to see if we can get a 200 response
             let linksGood = true;
-            for (const downloadUrl of downloadUrls) {
-              const response = yield* Effect.tryPromise({
-                try: async () => await axios<Stream.Readable>(downloadUrl.url, {
-                  responseType: 'stream',
-                  headers: {
-                    'User-Agent': 'OpenGameLauncher/1.0'
-                  }
-                }),
-                catch: (err) => {
-                  console.log('Error', err);
-                  return Effect.succeed(undefined);
-                }
-              });
-              console.log('Response', response.status);
+            // for (const downloadUrl of downloadUrls) {
+            //   const response = yield* Effect.tryPromise({
+            //     try: async () => await axios<Stream.Readable>(downloadUrl.url, {
+            //       responseType: 'stream',
+            //       headers: {
+            //         'User-Agent': 'OpenGameLauncher/1.0'
+            //       }
+            //     }),
+            //     catch: (err) => {
+            //       console.log('Error', err);
+            //       return Effect.succeed(undefined);
+            //     }
+            //   });
+            //   console.log('Response', response.status);
 
-              response.data.destroy();
-              if (response?.status !== 200) {
-                linksGood = false;
-                break;
-              }
-            }
+            //   response.data.destroy();
+            //   if (response?.status !== 200) {
+            //     linksGood = false;
+            //     break;
+            //   }
+            // }
 
             if (!linksGood) {
               console.log('No working links found', downloadUrls);
@@ -337,13 +337,19 @@ const program = Effect.gen(function* () {
               continue;
             }
             // Found a working service, break out
-            return { url: downloadUrls[0].url, name: downloadUrls[0].name };
+            return { url: downloadUrls[0].url, name: downloadUrls[0].name, headers: downloadUrls[0].headers };
           } catch (err) {
             lastError = err;
             // Continue to next service
           }
         }
         // If none worked, fail with the last error or a generic one
+        addon.notify({
+          id: 'no-download-found-steamrip',
+          message: 'No download supported found for ' + info.name,
+          type: 'error'
+        })
+        yield* Effect.promise(async () => await event.askForInput('No download link supported', 'You are seeing this message because there isn\'t a service that we currently support to download this game. We are slowly working towards 100% coverage, so please be patient!', new ConfigurationBuilder()));
         return yield* Effect.fail(lastError ?? new NoDownloadFoundError());
       });
     });
@@ -360,7 +366,7 @@ const program = Effect.gen(function* () {
       return {
         downloadType: 'direct',
         name: info.name,
-        files: [{ name: downloadDetails.name, downloadURL: downloadDetails.url }]
+        files: [{ name: downloadDetails.name, downloadURL: downloadDetails.url, headers: downloadDetails.headers }]
       } as SearchResult;
     });
 

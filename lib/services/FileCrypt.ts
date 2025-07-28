@@ -13,7 +13,7 @@ export default class FileCryptService extends DLService {
     return true;
   }
 
-  scrapeDownloadLinks(url: string, event: EventResponse<SearchResult>): Effect.Effect<{ name: string; url: string; }[], Error> {
+  scrapeDownloadLinks(url: string, event: EventResponse<SearchResult>): Effect.Effect<{ name: string; url: string; headers: Record<string, string> }[], Error> {
     return Effect.gen(function*() {
       yield* Effect.promise(() => event.askForInput(
         'Captcha Notice',
@@ -37,7 +37,8 @@ export default class FileCryptService extends DLService {
 
       return [{ 
         name: 'FILECRYPT_REDIRECT', 
-        url: finalUrl
+        url: finalUrl,
+        headers: {}
       }];
     });
   }

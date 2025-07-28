@@ -10,7 +10,7 @@ export default class PixelDrainService extends DLService {
     super('PixelDrain', 8);
   }
 
-  scrapeDownloadLinks(url: string, event: EventResponse<SearchResult>): Effect.Effect<{ name: string; url: string; }[], PixelDrainError | DownloadCatcherError> {
+  scrapeDownloadLinks(url: string, event: EventResponse<SearchResult>): Effect.Effect<{ name: string; url: string; headers: Record<string, string> }[], PixelDrainError | DownloadCatcherError> {
     const acquireBrowser = Effect.tryPromise({
       try: () => puppeteer.launch(PUPPETEER_OPTIONS),
       catch: (error) => new PixelDrainError({ url, error })
@@ -64,7 +64,7 @@ export default class PixelDrainService extends DLService {
           return yield* Effect.fail(new PixelDrainError({ url, error: 'No download url found' }));
         }
 
-        return [{ name: 'PIXELDRAIN', url: downloadUrl }];
+        return [{ name: 'PIXELDRAIN', url: downloadUrl, headers: {} }];
       }.bind(this)),
       (browser) => Effect.promise(() => browser.close())
     );

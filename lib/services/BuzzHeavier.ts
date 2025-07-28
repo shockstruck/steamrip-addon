@@ -10,7 +10,7 @@ export default class BuzzheavierService extends DLService {
     super('Buzzheavier', 7);
   }
 
-  scrapeDownloadLinks(url: string, event: EventResponse<SearchResult>): Effect.Effect<{ name: string; url: string; }[], BuzzHeavierError | DownloadCatcherError> {
+  scrapeDownloadLinks(url: string, event: EventResponse<SearchResult>): Effect.Effect<{ name: string; url: string; headers: Record<string, string> }[], BuzzHeavierError | DownloadCatcherError> {
     const acquireBrowser = Effect.tryPromise({
       try: () => puppeteer.launch(PUPPETEER_OPTIONS),
       catch: (error) => new BuzzHeavierError({ url, error })
@@ -78,6 +78,7 @@ export default class BuzzheavierService extends DLService {
         return [{
           url: downloadUrl,
           name: 'BUZZHEAVIER',
+          headers: {}
         }];
       }.bind(this)),
       (browser) => Effect.promise(() => browser.close())

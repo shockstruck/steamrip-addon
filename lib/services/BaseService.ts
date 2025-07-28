@@ -27,7 +27,7 @@ export class DLService {
     return false;
   }
 
-  scrapeDownloadLinks(url: string, event: EventResponse<SearchResult>): Effect.Effect<{ name: string, url: string }[], Error> {
+  scrapeDownloadLinks(url: string, event: EventResponse<SearchResult>): Effect.Effect<{ name: string, url: string; headers: Record<string, string> }[], Error> {
     return Effect.die(new Error('Not implemented'));
   }
 
