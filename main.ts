@@ -456,7 +456,7 @@ const program = Effect.gen(function* () {
         try: async () => await fs.readdir(path),
         catch: () => []
       });
-      const autoFoundGameFolder = yield* pipe(
+      let autoFoundGameFolder = yield* pipe(
         folders,
         Effect.forEach(folder => Effect.tryPromise({
           try: async () => [ folder, await fs.stat(join(path, folder)) ] as [string, Stats],
@@ -479,13 +479,17 @@ const program = Effect.gen(function* () {
         console.log("Auto found game folder", autoFoundGameFolder, 'Searching for executables...');
         executables = yield* pipe(
           Effect.tryPromise({
-            try: async () => await fs.readdir(join(path, autoFoundGameFolder)),
+            try: async () => await fs.readdir(join(path, autoFoundGameFolder as string)),
             catch: () => []
           }),
           Effect.andThen(executables => Effect.succeed(executables.filter(executable => executable.endsWith('.exe')))),
-          Effect.andThen(executables => Effect.succeed(executables.map(executable => join(path, autoFoundGameFolder, executable))))
+          Effect.andThen(executables => Effect.succeed(executables.map(executable => join(path, autoFoundGameFolder as string, executable))))
         );
         console.log("Found executables", executables);
+        if (executables.length === 0) {
+          event.log('No executables found in the game folder');
+          autoFoundGameFolder = undefined;
+        }
       }
 
       // now it's time to build the ui for the setup
