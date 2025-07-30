@@ -11,7 +11,7 @@ import { CommonRedistError, FileCryptError, InputError, NoDownloadFoundError, No
 import { join } from "path";
 import { spawnSync } from "child_process";
 import * as fs from 'fs/promises';
-import type { Stats } from "fs";
+import { existsSync, type Stats } from "fs";
 import axios from "axios";
 import { Stream } from "stream";
 
@@ -397,6 +397,22 @@ const program = Effect.gen(function* () {
       // now, inferring that it's a rar file, we need to extract it to the "path" folder
       // use 7zip in the program files if this is a windows machine
 
+      // if there are other files in this path other than the input archive, we need to delete them
+      const files = yield* Effect.tryPromise({
+        try: async () => await fs.readdir(path),
+        catch: () => []
+      });
+      if (files.length > 1) {
+        event.log('Found other files in the path, deleting them...');
+        for (const file of files) {
+          yield* Effect.tryPromise({
+            try: async () => await fs.rm(join(path, file), { force: true, maxRetries: 3, retryDelay: 1000 }),
+            catch: () => Effect.succeed(undefined)
+          });
+        }
+        event.log('Deleted other files in the path');
+      }
+      event.log('Extracting archive (this may take a while). We recommend to check the folder in' + path + ' to see if the extraction is progressing.')
       if (process.platform === 'win32') {
         const result = spawnSync('C:\\Program Files\\7-Zip\\7z.exe', [
           'x', // extract with full paths
