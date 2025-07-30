@@ -418,7 +418,7 @@ const program = Effect.gen(function* () {
           'x', // extract with full paths
           join(path, file.name), // input archive
           `-o${path}` // output directory
-        ], { stdio: 'inherit' });
+        ]);
         if (result.error) {
           yield* Effect.promise(async () => showErrorScreen());
           return yield* Effect.fail(new RarExtractionError({ path, error: result.error.message }));
@@ -434,7 +434,7 @@ const program = Effect.gen(function* () {
           'x', // extract with full paths
           join(path, file.name), // input archive
           `${path}` // output directory
-        ], { stdio: 'inherit' });
+        ]);
         if (result.error) {
           yield* Effect.promise(async () => showErrorScreen());
           return yield* Effect.fail(new RarExtractionError({ path, error: result.error.message }));
