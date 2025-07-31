@@ -558,10 +558,15 @@ const program = Effect.gen(function* () {
         // now spawn all of the common redistributables one at a time, to prevent overstimulating
         for (const file of commonRedistExecutables) {
           const result = yield* Effect.try({
-            try: () => spawnSync(join(path, '_CommonRedist', file), { stdio: 'inherit' }),
-            catch: (e) => e instanceof Error ? new CommonRedistError({ path, error: e.message }) : new CommonRedistError({ path, error: 'Unknown error' })
+            try: () => spawnSync(join(path, '_CommonRedist', file), { stdio: 'inherit', shell: true }),
+            catch: (e) => {
+              console.warn(`Failed to run common redistributable ${file}, may require admin rights:`, e instanceof Error ? e.message : 'Unknown error');
+              return { status: 0, error: null }; // Return success to continue with other redistributables
+            }
           });
           if (result.error) {
+            console.error('Error running common redistributable', result.error);
+            yield* Effect.promise(async () => showErrorScreen());
             return yield* Effect.fail(new CommonRedistError({ path, error: result.error.message }));
           }
         }
