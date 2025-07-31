@@ -9,7 +9,7 @@ import { Context, Effect, Layer, Match, pipe } from "effect";
 import { BunRuntime } from "@effect/platform-bun";
 import { CommonRedistError, FileCryptError, InputError, NoDownloadFoundError, NoFileFoundError, NoGameFoundError, NoServiceFoundError, RarExtractionError, ScrapeGameDownloadsError, SteamSearchError } from "./lib/errors";
 import { join } from "path";
-import { spawnSync } from "child_process";
+import { spawnSync, execSync } from "child_process";
 import * as fs from 'fs/promises';
 import { existsSync, type Stats } from "fs";
 import axios from "axios";
@@ -384,9 +384,8 @@ const program = Effect.gen(function* () {
 
   addon.on('setup', ({ path, multiPartFiles }, event) => {
     event.defer();
-    console.log("Setup", path, multiPartFiles);
     const setupEffect = Effect.fn('setupEffect')(function*() {
-      console.log("Setup", path, multiPartFiles);
+      const programFiles7zip = join(process.env['ProgramFiles'] || 'C:\\Program Files', '7-Zip', '7z.exe');
       const file = multiPartFiles?.[0];
       if (!file) return yield* Effect.fail(new NoFileFoundError());
 
@@ -412,31 +411,17 @@ const program = Effect.gen(function* () {
             });
           }
         }
-        event.log('Deleted other files in the path');
       }
-      event.log('Extracting archive (this may take a while). We recommend to check the folder in' + path + ' to see if the extraction is progressing.')
+      event.log('Extracting archive (this may take a while). We recommend to check the folder in ' + path + ' to see if the extraction is progressing.')
       if (process.platform === 'win32') {
-        // running command event.log
-        event.log('Running command: 7z x ' + join(path.replace(/^\//, ''), file.name).replace(/\//g, '\\') + ' -o"' + path.replace(/^\//, '').replace(/\//g, '\\').replace(/\\/g, '\\\\') + '" -y');
-        console.log('Running command: 7z x ' + join(path.replace(/^\//, ''), file.name).replace(/\//g, '\\') + ' -o"' + path.replace(/^\//, '').replace(/\//g, '\\').replace(/\\/g, '\\\\') + '" -y');
-        const result = spawnSync('C:\\Program Files\\7-Zip\\7z.exe', [
-          'x', // extract with full paths
-          `"${join(path.replace(/^\//, ''), file.name).replace(/\//g, '\\')}"`, // input archive
-          `-o"${path.replace(/^\//, '').replace(/\//g, '\\').replace(/\\/g, '\\\\')}"`, // output directory
-          '-y' // say yes to all prompts
-        ]);
-        // log out the stdout
-        console.log('Stdout:', result.stdout.toString());
-        console.log('Stderr:', result.stderr.toString());
-        if (result.error) {
-          console.error('Error extracting archive', result.error);
+        const command = `"${programFiles7zip}" x "${join(path, file.name)}" -o"${path}" -y`;
+        event.log(`Running command: ${command}`);
+        try {
+          execSync(command, { stdio: 'inherit' });
+        } catch (error) {
+          console.error('Error extracting archive', error);
           yield* Effect.promise(async () => showErrorScreen());
-          return yield* Effect.fail(new RarExtractionError({ path, error: result.error.message }));
-        }
-        if (result.status !== 0) {
-          console.error('Error extracting archive', result.status);
-          yield* Effect.promise(async () => showErrorScreen());
-          return yield* Effect.fail(new RarExtractionError({ path, error: `7z extraction failed with code ${result.status}` }));
+          return yield* Effect.fail(new RarExtractionError({ path, error: (error as Error).message }));
         }
       }
       else if (process.platform === 'darwin' || process.platform === 'linux') {
@@ -444,7 +429,8 @@ const program = Effect.gen(function* () {
         const result = spawnSync('unrar', [
           'x', // extract with full paths
           join(path, file.name), // input archive
-          `${path}` // output directory
+          `${path}`, // output directory
+          '-y' // say yes to all prompts
         ]);
         if (result.error) {
           yield* Effect.promise(async () => showErrorScreen());
