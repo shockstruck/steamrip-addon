@@ -418,6 +418,7 @@ const program = Effect.gen(function* () {
       if (process.platform === 'win32') {
         // running command event.log
         event.log('Running command: 7z x ' + join(path, file.name) + ' -o"' + path + '" -y');
+        console.log('Running command: 7z x ' + join(path, file.name) + ' -o"' + path + '" -y');
         const result = spawnSync('C:\\Program Files\\7-Zip\\7z.exe', [
           'x', // extract with full paths
           join(path, file.name), // input archive
