@@ -417,12 +417,12 @@ const program = Effect.gen(function* () {
       event.log('Extracting archive (this may take a while). We recommend to check the folder in' + path + ' to see if the extraction is progressing.')
       if (process.platform === 'win32') {
         // running command event.log
-        event.log('Running command: 7z x ' + join(path, file.name) + ' -o"' + path + '" -y');
-        console.log('Running command: 7z x ' + join(path, file.name) + ' -o"' + path + '" -y');
+        event.log('Running command: 7z x ' + join(path.replace(/^\//, ''), file.name).replace(/\//g, '\\') + ' -o"' + path.replace(/^\//, '').replace(/\//g, '\\').replace(/\\/g, '\\\\') + '" -y');
+        console.log('Running command: 7z x ' + join(path.replace(/^\//, ''), file.name).replace(/\//g, '\\') + ' -o"' + path.replace(/^\//, '').replace(/\//g, '\\').replace(/\\/g, '\\\\') + '" -y');
         const result = spawnSync('C:\\Program Files\\7-Zip\\7z.exe', [
           'x', // extract with full paths
-          `"${join(path, file.name).replace(/\//g, '\\')}"`, // input archive
-          `-o"${path.replace(/\//g, '\\').replace(/\\/g, '\\\\')}"`, // output directory
+          `"${join(path.replace(/^\//, ''), file.name).replace(/\//g, '\\')}"`, // input archive
+          `-o"${path.replace(/^\//, '').replace(/\//g, '\\').replace(/\\/g, '\\\\')}"`, // output directory
           '-y' // say yes to all prompts
         ]);
         // log out the stdout
