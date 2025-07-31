@@ -419,9 +419,9 @@ const program = Effect.gen(function* () {
         // running command event.log
         event.log('Running command: 7z x ' + join(path, file.name) + ' -o"' + path + '" -y');
         console.log('Running command: 7z x ' + join(path, file.name) + ' -o"' + path + '" -y');
-        const result = spawnSync('C:\\Program Files\\7-Zip\\7z.exe', [
+        const result = spawnSync('"C:\\Program Files\\7-Zip\\7z.exe"', [
           'x', // extract with full paths
-          join(path, file.name), // input archive
+          `"${join(path, file.name)}"`, // input archive
           `-o"${path}"`, // output directory
           '-y' // say yes to all prompts
         ]);
