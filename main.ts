@@ -419,13 +419,16 @@ const program = Effect.gen(function* () {
         const result = spawnSync('C:\\Program Files\\7-Zip\\7z.exe', [
           'x', // extract with full paths
           join(path, file.name), // input archive
-          `-o${path}` // output directory
+          `-o${path}`, // output directory
+          '-y' // say yes to all prompts
         ]);
         if (result.error) {
+          console.error('Error extracting archive', result.error);
           yield* Effect.promise(async () => showErrorScreen());
           return yield* Effect.fail(new RarExtractionError({ path, error: result.error.message }));
         }
         if (result.status !== 0) {
+          console.error('Error extracting archive', result.status);
           yield* Effect.promise(async () => showErrorScreen());
           return yield* Effect.fail(new RarExtractionError({ path, error: `7z extraction failed with code ${result.status}` }));
         }
