@@ -404,11 +404,13 @@ const program = Effect.gen(function* () {
       });
       if (files.length > 1) {
         event.log('Found other files in the path, deleting them...');
-        for (const file of files) {
-          yield* Effect.tryPromise({
-            try: async () => await fs.rm(join(path, file), { force: true, maxRetries: 3, retryDelay: 1000 }),
-            catch: () => Effect.succeed(undefined)
-          });
+        for (const fileName of files) {
+          if (fileName !== file.name) {
+            yield* Effect.tryPromise({
+              try: async () => await fs.rm(join(path, fileName), { force: true, maxRetries: 3, retryDelay: 1000 }),
+              catch: () => Effect.succeed(undefined)
+            });
+          }
         }
         event.log('Deleted other files in the path');
       }
