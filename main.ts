@@ -419,7 +419,7 @@ const program = Effect.gen(function* () {
         const result = spawnSync('C:\\Program Files\\7-Zip\\7z.exe', [
           'x', // extract with full paths
           join(path, file.name), // input archive
-          `-o${path}`, // output directory
+          `-o"${path}"`, // output directory
           '-y' // say yes to all prompts
         ]);
         if (result.error) {
