@@ -513,7 +513,7 @@ const program = Effect.gen(function* () {
         inputAsk.addBooleanOption(option => 
           option.setName('runCommonRedist')
             .setDisplayName('Run Common Redistributables')
-            .setDescription('Run the Common Redistributables (Useful if you are downloading a game from Steamrip for the first time, or if you don\t know if you need it).')
+            .setDescription('Run the Common Redistributables (Useful if you are downloading a game from Steamrip for the first time, or if you don\'t know if you need it).')
             .setDefaultValue(true)
         );
       }
