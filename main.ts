@@ -405,12 +405,20 @@ const program = Effect.gen(function* () {
       });
       if (files.length > 1) {
         event.log('Found other files in the path, deleting them...');
+        console.log("Files", files);
         for (const fileName of files) {
           if (fileName !== file.name) {
-            yield* Effect.tryPromise({
-              try: async () => await fs.rm(join(path, fileName), { force: true, maxRetries: 3, retryDelay: 1000 }),
-              catch: () => Effect.void
+            const result = yield* Effect.tryPromise({
+              try: async () => {
+                await fs.rm(join(path, fileName), { force: true, maxRetries: 3, retryDelay: 1000 });
+                return true;
+              },
+              catch: () => {
+                console.error('Error deleting file', fileName);
+                return false;
+              }
             });
+            console.log("Result in deleting file:", fileName, result);
           }
         }
       }
