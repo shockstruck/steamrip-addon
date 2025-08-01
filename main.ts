@@ -452,10 +452,13 @@ const program = Effect.gen(function* () {
           '-y' // say yes to all prompts
         ]);
         if (result.error) {
+          console.error('Error extracting archive', result);
+          console.error('Error extracting archive', result.error);
           yield* Effect.promise(async () => showErrorScreen());
           return yield* Effect.fail(new RarExtractionError({ path, error: result.error.message }));
         }
         if (result.status !== 0) {
+          console.error('Error extracting archive', result.status);
           yield* Effect.promise(async () => showErrorScreen());
           return yield* Effect.fail(new RarExtractionError({ path, error: `unrar extraction failed with code ${result.status}` }));
         }
