@@ -8,7 +8,7 @@ import FileCryptService from "./lib/services/FileCrypt";
 import { Context, Effect, Layer, Match, pipe } from "effect";
 import { BunRuntime } from "@effect/platform-bun";
 import { CommonRedistError, FileCryptError, InputError, NoDownloadFoundError, NoFileFoundError, NoGameFoundError, NoServiceFoundError, RarExtractionError, ScrapeGameDownloadsError, SteamSearchError } from "./lib/errors";
-import { join } from "path";
+import { join, relative } from "path";
 import { spawnSync, execSync } from "child_process";
 import * as fs from 'fs/promises';
 import { existsSync, type Stats } from "fs";
@@ -537,9 +537,9 @@ const program = Effect.gen(function* () {
             option.setName('executable')
               .setDisplayName('Executable Path')
               .setDescription('Executable path to run the game (ends in .exe). This will be inside of the game folder.')
-              .setAllowedValues(executables.map(executable => executable.split(path)[1]))
+              .setAllowedValues(executables.map(executable => relative(path, executable)))
               .setInputType('text')
-              .setDefaultValue(executables[0])
+              .setDefaultValue(relative(path, executables[0]))
           );
         }
         else {
