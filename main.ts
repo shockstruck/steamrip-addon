@@ -395,6 +395,9 @@ const program = Effect.gen(function* () {
         await event.askForInput('Error', 'Oops! It seems like this game wans\'t downloaded correctly. Go to the path: "' + path + '" and delete the file to try again. It is likely that this game is hosted on a service that is not currently working. Stay subscribed to the thread to get notified when it is fixed.', new ConfigurationBuilder())
       }
 
+      event.log('Waiting for zip to be unlocked by OpenGameInstaller...');
+      yield* Effect.sleep(1000);
+
       // now, inferring that it's a rar file, we need to extract it to the "path" folder
       // use 7zip in the program files if this is a windows machine
 
