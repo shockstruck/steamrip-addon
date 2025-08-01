@@ -411,7 +411,7 @@ const program = Effect.gen(function* () {
             const result = yield* pipe(
               Effect.tryPromise({
                 try: async () => {
-                  await fs.rm(join(path, fileName), { force: true, maxRetries: 3, retryDelay: 1000 });
+                  await fs.rm(join(path, fileName), { force: true, recursive: true, maxRetries: 3, retryDelay: 1000 });
                   return true;
                 },
                 catch: () => {
