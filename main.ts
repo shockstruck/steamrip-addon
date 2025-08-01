@@ -383,10 +383,12 @@ const program = Effect.gen(function* () {
   });
 
   addon.on('setup', ({ path, multiPartFiles }, event) => {
+    event.log(`Setup: path: ${path}, multiPartFiles: ${multiPartFiles}`);
     event.defer();
     const setupEffect = Effect.fn('setupEffect')(function*() {
       const programFiles7zip = join(process.env['ProgramFiles'] || 'C:\\Program Files', '7-Zip', '7z.exe');
       const file = multiPartFiles?.[0];
+      console.log("File", file);
       if (!file) return yield* Effect.fail(new NoFileFoundError());
 
       const showErrorScreen = async () => {
@@ -407,7 +409,7 @@ const program = Effect.gen(function* () {
           if (fileName !== file.name) {
             yield* Effect.tryPromise({
               try: async () => await fs.rm(join(path, fileName), { force: true, maxRetries: 3, retryDelay: 1000 }),
-              catch: () => Effect.succeed(undefined)
+              catch: () => Effect.void
             });
           }
         }
