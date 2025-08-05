@@ -8,7 +8,7 @@
         "axios": "^1.10.0",
         "effect": "^3.16.10",
         "jsdom": "^26.1.0",
-        "ogi-addon": "^1.5.1",
+        "ogi-addon": "^1.6.2",
         "puppeteer": "^24.10.1",
         "puppeteer-extra": "^3.3.6",
         "puppeteer-extra-plugin-adblocker": "^2.13.6",
@@ -20,6 +20,7 @@
         "@types/node": "^24.0.3",
         "@types/node-notifier": "^8.0.5",
         "@types/prompts": "^2.4.9",
+        "@types/puppeteer": "^7.0.4",
         "typescript": "^5.8.3",
       },
     },
@@ -148,6 +149,8 @@
     "@types/node-notifier": ["@types/node-notifier@8.0.5", "", { "dependencies": { "@types/node": "*" } }, "sha512-LX7+8MtTsv6szumAp6WOy87nqMEdGhhry/Qfprjm1Ma6REjVzeF7SCyvPtp5RaF6IkXCS9V4ra8g5fwvf2ZAYg=="],
 
     "@types/prompts": ["@types/prompts@2.4.9", "", { "dependencies": { "@types/node": "*", "kleur": "^3.0.3" } }, "sha512-qTxFi6Buiu8+50/+3DGIWLHM6QuWsEKugJnnP6iv2Mc4ncxE4A/OJkjuVOA+5X0X1S/nq5VJRa8Lu+nwcvbrKA=="],
+
+    "@types/puppeteer": ["@types/puppeteer@7.0.4", "", { "dependencies": { "puppeteer": "*" } }, "sha512-ja78vquZc8y+GM2al07GZqWDKQskQXygCDiu0e3uO0DMRKqE0MjrFBFmTulfPYzLB6WnL7Kl2tFPy0WXSpPomg=="],
 
     "@types/tough-cookie": ["@types/tough-cookie@4.0.5", "", {}, "sha512-/Ad8+nIOV7Rl++6f1BdKxFSMgmoqEoYbHRpPcx3JEfv8VRsQe9Z4mCXeJBzxs7mbHY/XOZZuXlRNfhpVPbs6ZA=="],
 
@@ -407,7 +410,7 @@
 
     "nwsapi": ["nwsapi@2.2.20", "", {}, "sha512-/ieB+mDe4MrrKMT8z+mQL8klXydZWGR5Dowt4RAGKbJ3kIGEx3X4ljUo+6V73IXtUPWgfOlU5B9MlGxFO5T+cA=="],
 
-    "ogi-addon": ["ogi-addon@1.5.1", "", { "dependencies": { "fuse.js": "^7.1.0", "ws": "^8.4.0", "zod": "^3.23.8" } }, "sha512-Cx+lbfXUI3HkeBYmIIer5ODptKBSGTTHTbiCYPlvnE8WTMAT3jX07y6+yvX3U30suqdEVjmNsuCrdWw2yKXvAA=="],
+    "ogi-addon": ["ogi-addon@1.6.2", "", { "dependencies": { "fuse.js": "^7.1.0", "ws": "^8.4.0", "zod": "^3.23.8" } }, "sha512-tOYCPSkbDtUw3xGkuYzlnVxaKCpkJV+WCxTb9vqHMt5QoC6/Dxn3anHXuKmKBn61i68Q5KIvL2tozsSMGjSzUw=="],
 
     "once": ["once@1.4.0", "", { "dependencies": { "wrappy": "1" } }, "sha512-lNaJgI+2Q5URQBkccEKHTQOPaXdUxnZZElQTZY0MFUAuaEqe1E+Nyvgdz/aIyNi6Z9MzO5dv1H8n58/GELp3+w=="],
 

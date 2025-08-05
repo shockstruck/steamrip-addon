@@ -9,11 +9,13 @@ import { Context, Effect, Layer, Match, pipe } from "effect";
 import { BunRuntime } from "@effect/platform-bun";
 import { CommonRedistError, FileCryptError, InputError, NoDownloadFoundError, NoFileFoundError, NoGameFoundError, NoServiceFoundError, RarExtractionError, ScrapeGameDownloadsError, SteamSearchError } from "./lib/errors";
 import { join, relative } from "path";
-import { spawnSync, execSync } from "child_process";
+import { spawnSync, execSync, spawn } from "child_process";
 import * as fs from 'fs/promises';
 import { existsSync, type Stats } from "fs";
 import axios from "axios";
 import { Stream } from "stream";
+import { cloudflareSolve } from "./lib/cloudflare";
+import { headerManager } from "./lib/header-manager";
 
 const baseAddon = new OGIAddon({
   name: 'Steamrip Tool',
@@ -147,6 +149,12 @@ const program = Effect.gen(function* () {
       .setDescription('Disallow services that require a captcha to be solved.')
       .setDefaultValue(false)
     )
+    .addBooleanOption(option => option
+      .setName('clearCloudflareCookies')
+      .setDisplayName('Clear Cloudflare Cookies')
+      .setDescription('Clear stored Cloudflare cookies on next connect (useful if you encounter issues).')
+      .setDefaultValue(false)
+    )
   )
 
   addon.on('connect', () => {
@@ -156,6 +164,33 @@ const program = Effect.gen(function* () {
         catch: () => new Error('Failed to create task') // Define a specific error if needed
       });
 
+      yield* Effect.sync(() => task.log('Checking Cloudflare protection...'));
+      
+      // // Check if user wants to clear headers
+      if (addon.config.getBooleanValue('clearCloudflareCookies') ?? false) {
+        yield* Effect.sync(() => task.log('Clearing Cloudflare headers as requested...'));
+        yield* headerManager.clearHeaders();
+      }
+      
+      // Load existing headers first
+      yield* headerManager.loadHeaders();
+      
+      // Check if we need to solve Cloudflare
+      const cloudflareResult = yield* cloudflareSolve('https://steamrip.com', addon);
+      
+      if (cloudflareResult) {
+        yield* Effect.sync(() => task.log('Cloudflare headers obtained and stored.'));
+      } else {
+        yield* Effect.sync(() => task.log('No Cloudflare protection detected.'));
+      }
+
+      yield* Effect.sync(() => task.log('Cleaning up expired scrapes...'));
+      yield* scraper.cleanupExpiredScrapes();
+      
+      // Log scrape statistics
+      const stats = yield* scraper.getScrapeStats();
+      yield* Effect.sync(() => task.log(`Scrape cache: ${stats.valid} valid, ${stats.expired} expired, ${stats.total} total files`));
+      
       yield* Effect.sync(() => task.log('Implementing local catalog...'));
       yield* scraper.upgradeLocals();
       yield* Effect.sync(() => task.log('Processing local catalog...'));
@@ -166,6 +201,14 @@ const program = Effect.gen(function* () {
 
     Effect.runPromise(connectEffect()).catch(error => {
       console.error("Error during connect:", error);
+      // Show user-friendly error message for Cloudflare failures
+      if (error.message && (error.message.includes('Cloudflare') || error.message.includes('cf_') || error.message.includes('No valid Cloudflare headers'))) {
+        addon.notify({
+          message: 'Failed to solve Cloudflare protection. Please try again or check your internet connection.',
+          id: 'cloudflare-error',
+          type: 'error',
+        });
+      }
     });
   });
 
@@ -230,6 +273,17 @@ const program = Effect.gen(function* () {
           console.log("Steam search error", e);
           return Effect.succeed([]);
         }
+      }),
+      Effect.catchAll((error: unknown) => {
+        console.error("Search error:", error);
+        if (error instanceof Error && error.message && error.message.includes('No valid Cloudflare headers')) {
+          addon.notify({
+            message: 'Cloudflare headers are missing. Please reconnect to solve Cloudflare protection.',
+            id: 'cloudflare-headers-missing',
+            type: 'warning',
+          });
+        }
+        return Effect.succeed([]);
       }),
       Effect.andThen(res => event.resolve(res)),
       Effect.runFork
@@ -372,8 +426,15 @@ const program = Effect.gen(function* () {
 
     pipe(
       requestDlEffect(),
-      Effect.catchAll(error => {
+      Effect.catchAll((error: unknown) => {
         console.error("Error in request-dl:", error);
+        if (error instanceof Error && error.message && error.message.includes('No valid Cloudflare headers')) {
+          addon.notify({
+            message: 'Cloudflare headers are missing. Please reconnect to solve Cloudflare protection.',
+            id: 'cloudflare-headers-missing',
+            type: 'warning',
+          });
+        }
         event.fail('Failed to get download link');
         return Effect.fail(error);
       }),
@@ -445,12 +506,27 @@ const program = Effect.gen(function* () {
       }
       else if (process.platform === 'darwin' || process.platform === 'linux') {
         // use 'unrar' instead of 7z
-        const result = spawnSync('unrar', [
-          'x', // extract with full paths
-          join(path, file.name), // input archive
-          `${path}`, // output directory
-          '-y' // say yes to all prompts
-        ]);
+        console.log(join(path, file.name));
+        const result = yield* Effect.tryPromise({
+          try: () => new Promise<{ error?: Error; status: number }>((resolve) => {
+            const child = spawn('unrar', [
+              'x', // extract with full paths
+              join(path, file.name), // input archive
+              `${path}`, // output directory
+              '-y' // say yes to all prompts
+            ], { stdio: 'ignore' });
+
+            child.on('error', (error) => {
+              resolve({ error, status: 1 });
+            });
+
+            child.on('close', (code) => {
+              resolve({ status: code ?? 1 });
+            });
+          }),
+          catch: (error) => ({ error: error as Error, status: 1 })
+        });
+        console.log(result);
         if (result.error) {
           console.error('Error extracting archive', result);
           console.error('Error extracting archive', result.error);
@@ -514,7 +590,7 @@ const program = Effect.gen(function* () {
       // now it's time to build the ui for the setup
       const inputAsk = new ConfigurationBuilder()
       let addedInput = false;
-      if (hasCommonRedist && process.platform === 'win32') {
+      if (hasCommonRedist) {
         addedInput = true;
         inputAsk.addBooleanOption(option => 
           option.setName('runCommonRedist')
@@ -529,7 +605,7 @@ const program = Effect.gen(function* () {
           option.setName('cwd')
             .setDisplayName('Game Folder')
             .setDescription('Game folder to run the game from. This is the folder that contains the game executable.')
-            .setInputType('file')
+            .setInputType('folder')
             .setDefaultValue('')
         );
       }
@@ -564,6 +640,7 @@ const program = Effect.gen(function* () {
       }
 
       // if the 'run common redist' is true, we need to run the common redistributables
+      let commonRedistExecutables: { name: string, path: string }[] = [];
       if (input.runCommonRedist) {
         const commonRedist = yield* Effect.tryPromise({
           try: async () => await fs.readdir(join(path, '_CommonRedist')),
@@ -572,25 +649,28 @@ const program = Effect.gen(function* () {
         if (commonRedist.length === 0) {
           return yield* Effect.fail(new NoFileFoundError());
         }
-        const commonRedistExecutables = commonRedist.filter(file => file.endsWith('.exe'));
-        if (commonRedistExecutables.length === 0) {
+        const redistributables = commonRedist.filter(file => file.endsWith('.exe') || file.endsWith('.msi'));
+        if (redistributables.length === 0) {
           return yield* Effect.fail(new NoFileFoundError());
         }
+        // join path to common redist
+        commonRedistExecutables = redistributables.map(file => ({ name: file, path: join(path, '_CommonRedist', file) }));
+        // order so that xna is last
+        commonRedistExecutables = commonRedistExecutables.sort((a, b) => {
+          if (a.name.toLowerCase().includes('xna')) return 1;
+          if (b.name.toLowerCase().includes('xna')) return -1;
+          return 0;
+        });
+        // append to the front microsoft c# runtime
+        if (process.platform === 'linux') {
+          // remove the dotNet from the commonRedistExecutables
+          commonRedistExecutables = commonRedistExecutables.filter(file => !file.name.toLowerCase().includes('dotnet'));
 
-        // now spawn all of the common redistributables one at a time, to prevent overstimulating
-        for (const file of commonRedistExecutables) {
-          const result = yield* Effect.try({
-            try: () => spawnSync(`"${join(path, '_CommonRedist', file)}"`, { stdio: 'inherit', shell: true }),
-            catch: (e) => {
-              console.warn(`Failed to run common redistributable ${file}, may require admin rights:`, e instanceof Error ? e.message : 'Unknown error');
-              return { status: 0, error: null }; // Return success to continue with other redistributables
-            }
-          });
-          if (result.error) {
-            console.error('Error running common redistributable', result.error);
-            yield* Effect.promise(async () => showErrorScreen());
-            return yield* Effect.fail(new CommonRedistError({ path, error: result.error.message }));
-          }
+          // append to the front dotnet
+          commonRedistExecutables = [ { name: 'dotnet48', path: 'winetricks' }, ...commonRedistExecutables ]
+
+          // remove everyting that's dxwebsetup
+          commonRedistExecutables = commonRedistExecutables.filter(file => !file.name.toLowerCase().includes('dxwebsetup'));
         }
       }
       if (autoFoundGameFolder) {
@@ -619,6 +699,7 @@ const program = Effect.gen(function* () {
         cwd: input.cwd as string,
         launchExecutable: input.executable as string,
         version: '1.0',
+        redistributables: commonRedistExecutables,
         launchArguments: '%command%'
       };
       return yield* Effect.succeed(response);

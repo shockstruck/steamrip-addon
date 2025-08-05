@@ -7,7 +7,7 @@
     "axios": "^1.10.0",
     "effect": "^3.16.10",
     "jsdom": "^26.1.0",
-    "ogi-addon": "^1.5.1",
+    "ogi-addon": "^1.6.2",
     "puppeteer": "^24.10.1",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-adblocker": "^2.13.6",
@@ -23,6 +23,7 @@
     "@types/node": "^24.0.3",
     "@types/node-notifier": "^8.0.5",
     "@types/prompts": "^2.4.9",
+    "@types/puppeteer": "^7.0.4",
     "typescript": "^5.8.3"
   }
 }
