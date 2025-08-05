@@ -12,7 +12,7 @@ export const PUPPETEER_OPTIONS: Parameters<VanillaPuppeteer["launch"]>[0] = {
     "--ignore-certificate-errors",
     "--lang=en-US,en;q=0.9",
   ],
-  defaultViewport: { width: 1366, height: 768 }
+  defaultViewport: { width: 1920, height: 1080 }
 }
 
 export class DLService {
