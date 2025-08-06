@@ -718,8 +718,7 @@ const program = Effect.gen(function* () {
         cwd: input.cwd as string,
         launchExecutable: input.executable as string,
         version: '1.0',
-        // redistributables: commonRedistExecutables,
-        redistributables: [],
+        redistributables: commonRedistExecutables,
         launchArguments: '%command%'
       };
       return yield* Effect.succeed(response);
