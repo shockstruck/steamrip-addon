@@ -640,39 +640,39 @@ const program = Effect.gen(function* () {
       }
 
       // if the 'run common redist' is true, we need to run the common redistributables
-      let commonRedistExecutables: { name: string, path: string }[] = [];
-      if (input.runCommonRedist) {
-        const commonRedist = yield* Effect.tryPromise({
-          try: async () => await fs.readdir(join(path, '_CommonRedist')),
-          catch: () => Effect.fail(new NoFileFoundError())
-        });
-        if (commonRedist.length === 0) {
-          return yield* Effect.fail(new NoFileFoundError());
-        }
-        const redistributables = commonRedist.filter(file => file.endsWith('.exe') || file.endsWith('.msi'));
-        if (redistributables.length === 0) {
-          return yield* Effect.fail(new NoFileFoundError());
-        }
-        // join path to common redist
-        commonRedistExecutables = redistributables.map(file => ({ name: file, path: join(path, '_CommonRedist', file) }));
-        // order so that xna is last
-        commonRedistExecutables = commonRedistExecutables.sort((a, b) => {
-          if (a.name.toLowerCase().includes('xna')) return 1;
-          if (b.name.toLowerCase().includes('xna')) return -1;
-          return 0;
-        });
-        // append to the front microsoft c# runtime
-        if (process.platform === 'linux') {
-          // remove the dotNet from the commonRedistExecutables
-          commonRedistExecutables = commonRedistExecutables.filter(file => !file.name.toLowerCase().includes('dotnet'));
+      // let commonRedistExecutables: { name: string, path: string }[] = [];
+      // if (input.runCommonRedist) {
+      //   const commonRedist = yield* Effect.tryPromise({
+      //     try: async () => await fs.readdir(join(path, '_CommonRedist')),
+      //     catch: () => Effect.fail(new NoFileFoundError())
+      //   });
+      //   if (commonRedist.length === 0) {
+      //     return yield* Effect.fail(new NoFileFoundError());
+      //   }
+      //   const redistributables = commonRedist.filter(file => file.endsWith('.exe') || file.endsWith('.msi'));
+      //   if (redistributables.length === 0) {
+      //     return yield* Effect.fail(new NoFileFoundError());
+      //   }
+      //   // join path to common redist
+      //   commonRedistExecutables = redistributables.map(file => ({ name: file, path: join(path, '_CommonRedist', file) }));
+      //   // order so that xna is last
+      //   commonRedistExecutables = commonRedistExecutables.sort((a, b) => {
+      //     if (a.name.toLowerCase().includes('xna')) return 1;
+      //     if (b.name.toLowerCase().includes('xna')) return -1;
+      //     return 0;
+      //   });
+      //   // append to the front microsoft c# runtime
+      //   if (process.platform === 'linux') {
+      //     // remove the dotNet from the commonRedistExecutables
+      //     commonRedistExecutables = commonRedistExecutables.filter(file => !file.name.toLowerCase().includes('dotnet'));
 
-          // append to the front dotnet
-          commonRedistExecutables = [ { name: 'dotnet48', path: 'winetricks' }, ...commonRedistExecutables ]
+      //     // append to the front dotnet
+      //     commonRedistExecutables = [ { name: 'dotnet48', path: 'winetricks' }, ...commonRedistExecutables ]
 
-          // remove everyting that's dxwebsetup
-          commonRedistExecutables = commonRedistExecutables.filter(file => !file.name.toLowerCase().includes('dxwebsetup'));
-        }
-      }
+      //     // remove everyting that's dxwebsetup
+      //     commonRedistExecutables = commonRedistExecutables.filter(file => !file.name.toLowerCase().includes('dxwebsetup'));
+      //   }
+      // }
       if (autoFoundGameFolder) {
         input.cwd = join(path, autoFoundGameFolder);
       }
@@ -699,7 +699,8 @@ const program = Effect.gen(function* () {
         cwd: input.cwd as string,
         launchExecutable: input.executable as string,
         version: '1.0',
-        redistributables: commonRedistExecutables,
+        // redistributables: commonRedistExecutables,
+        redistributables: [],
         launchArguments: '%command%'
       };
       return yield* Effect.succeed(response);
