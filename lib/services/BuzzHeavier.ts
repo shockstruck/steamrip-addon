@@ -7,7 +7,7 @@ import type { EventResponse, SearchResult } from "ogi-addon";
 
 export default class BuzzheavierService extends DLService {
   public constructor() {
-    super('Buzzheavier', 4); // Buzzheavier is super weird with downloads at times, so low priority.
+    super('Buzzheavier', 8); // Buzzheavier is super weird with downloads at times, so low priority.
   }
 
   scrapeDownloadLinks(
