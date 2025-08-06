@@ -8,7 +8,7 @@ import FileCryptService from "./lib/services/FileCrypt";
 import { Context, Effect, Layer, Match, pipe } from "effect";
 import { BunRuntime } from "@effect/platform-bun";
 import { CommonRedistError, FileCryptError, InputError, NoDownloadFoundError, NoFileFoundError, NoGameFoundError, NoServiceFoundError, RarExtractionError, ScrapeGameDownloadsError, SteamSearchError } from "./lib/errors";
-import { join, relative } from "path";
+import { dirname, join, relative } from "path";
 import { spawnSync, execSync, spawn } from "child_process";
 import * as fs from 'fs/promises';
 import { existsSync, type Stats } from "fs";
@@ -212,8 +212,8 @@ const program = Effect.gen(function* () {
     });
   });
 
-  addon.on('search', ({ storefront, appID }, event) => {
-    if (storefront !== 'steam') {
+  addon.on('search', ({ storefront, appID, for: forType }, event) => {
+    if (forType === 'task') {
       event.resolve([]);
       return;
     }
@@ -578,6 +578,10 @@ const program = Effect.gen(function* () {
             catch: () => []
           }),
           Effect.andThen(executables => Effect.succeed(executables.filter(executable => executable.endsWith('.exe')))),
+          // remove UnityCrashHandler
+          Effect.andThen(executables => Effect.succeed(executables.filter(executable => !executable.toLowerCase().includes('unitycrashhandler')))),
+          // remove uninstall00.exe
+          Effect.andThen(executables => Effect.succeed(executables.filter(executable => !executable.toLowerCase().includes('unins000.exe')))),
           Effect.andThen(executables => Effect.succeed(executables.map(executable => join(path, autoFoundGameFolder as string, executable))))
         );
         console.log("Found executables", executables);
@@ -586,6 +590,8 @@ const program = Effect.gen(function* () {
           autoFoundGameFolder = undefined;
         }
       }
+
+      let isUnity = false;
 
       // now it's time to build the ui for the setup
       const inputAsk = new ConfigurationBuilder()
@@ -640,39 +646,42 @@ const program = Effect.gen(function* () {
       }
 
       // if the 'run common redist' is true, we need to run the common redistributables
-      // let commonRedistExecutables: { name: string, path: string }[] = [];
-      // if (input.runCommonRedist) {
-      //   const commonRedist = yield* Effect.tryPromise({
-      //     try: async () => await fs.readdir(join(path, '_CommonRedist')),
-      //     catch: () => Effect.fail(new NoFileFoundError())
-      //   });
-      //   if (commonRedist.length === 0) {
-      //     return yield* Effect.fail(new NoFileFoundError());
-      //   }
-      //   const redistributables = commonRedist.filter(file => file.endsWith('.exe') || file.endsWith('.msi'));
-      //   if (redistributables.length === 0) {
-      //     return yield* Effect.fail(new NoFileFoundError());
-      //   }
-      //   // join path to common redist
-      //   commonRedistExecutables = redistributables.map(file => ({ name: file, path: join(path, '_CommonRedist', file) }));
-      //   // order so that xna is last
-      //   commonRedistExecutables = commonRedistExecutables.sort((a, b) => {
-      //     if (a.name.toLowerCase().includes('xna')) return 1;
-      //     if (b.name.toLowerCase().includes('xna')) return -1;
-      //     return 0;
-      //   });
-      //   // append to the front microsoft c# runtime
-      //   if (process.platform === 'linux') {
-      //     // remove the dotNet from the commonRedistExecutables
-      //     commonRedistExecutables = commonRedistExecutables.filter(file => !file.name.toLowerCase().includes('dotnet'));
+      let commonRedistExecutables: { name: string, path: string }[] = [];
+      if (input.runCommonRedist) {
+        const commonRedist = yield* Effect.tryPromise({
+          try: async () => await fs.readdir(join(path, '_CommonRedist')),
+          catch: () => Effect.fail(new NoFileFoundError())
+        });
+        if (commonRedist.length === 0) {
+          return yield* Effect.fail(new NoFileFoundError());
+        }
+        const redistributables = commonRedist.filter(file => file.endsWith('.exe') || file.endsWith('.msi'));
+        if (redistributables.length === 0) {
+          return yield* Effect.fail(new NoFileFoundError());
+        }
+        // join path to common redist
+        commonRedistExecutables = redistributables.map(file => ({ name: file, path: join(path, '_CommonRedist', file) }));
+        // order so that xna is last
+        commonRedistExecutables = commonRedistExecutables.sort((a, b) => {
+          if (a.name.toLowerCase().includes('xna')) return 1;
+          if (b.name.toLowerCase().includes('xna')) return -1;
+          return 0;
+        });
+        // append to the front microsoft c# runtime
+        if (process.platform === 'linux') {
+          // remove the dotNet from the commonRedistExecutables
+          commonRedistExecutables = commonRedistExecutables.filter(file => !file.name.toLowerCase().includes('dotnet'));
 
-      //     // append to the front dotnet
-      //     commonRedistExecutables = [ { name: 'dotnet48', path: 'winetricks' }, ...commonRedistExecutables ]
-
-      //     // remove everyting that's dxwebsetup
-      //     commonRedistExecutables = commonRedistExecutables.filter(file => !file.name.toLowerCase().includes('dxwebsetup'));
-      //   }
-      // }
+          // append to the front dotnet
+          commonRedistExecutables = [ { name: 'dotnet48', path: 'winetricks' }, ...commonRedistExecutables ]
+          // apply dotnet20 to the back
+          commonRedistExecutables = [ ...commonRedistExecutables, { name: 'dotnet20', path: 'winetricks' } ]
+          // add dotnet-repair to the end
+          commonRedistExecutables = [ ...commonRedistExecutables, { name: 'dotnet-repair', path: 'microsoft' } ]
+          // remove everyting that's dxwebsetup
+          commonRedistExecutables = commonRedistExecutables.filter(file => !file.name.toLowerCase().includes('dxwebsetup'));
+        }
+      }
       if (autoFoundGameFolder) {
         input.cwd = join(path, autoFoundGameFolder);
       }
@@ -684,6 +693,16 @@ const program = Effect.gen(function* () {
 
       if (executables.length === 1) {
         input.executable = executables[0];
+      }
+
+      // check the path of the executable and see if there's a "UnityPlayer.dll" in the path
+      if (existsSync(join(dirname(input.executable as string), 'UnityPlayer.dll'))) {
+        isUnity = true;
+      }
+
+      // if this is unity and we're on linux, remove all dependencies since it works out of the box (and i've been testing for like 10+ hours and it just won't work otherwise)
+      if (isUnity && process.platform === 'linux') {
+        commonRedistExecutables = [];
       }
 
       // then remove the download path
