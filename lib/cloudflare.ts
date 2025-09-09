@@ -32,8 +32,12 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
           headers: headerManager.getHeaderObject(),
           timeout: 10000 
         }),
-        catch: () => new Error('Test request failed')
+        catch: () => undefined 
       });
+
+      if (!testResponse) {
+        return Effect.fail(new Error('Test request failed'));
+      }
       
       // If we get a successful response without Cloudflare, headers are still valid
       if (testResponse.status === 200 && !(testResponse.data as string).includes('Cloudflare')) {

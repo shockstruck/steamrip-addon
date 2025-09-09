@@ -176,12 +176,23 @@ const program = Effect.gen(function* () {
       yield* headerManager.loadHeaders();
       
       // Check if we need to solve Cloudflare
-      const cloudflareResult = yield* cloudflareSolve('https://steamrip.com', addon);
+      const cloudflareResult = yield* cloudflareSolve('https://steamrip.com', addon).pipe(Effect.catchAll(e => Effect.succeed(undefined)));
       
       if (cloudflareResult) {
         yield* Effect.sync(() => task.log('Cloudflare headers obtained and stored.'));
       } else {
         yield* Effect.sync(() => task.log('No Cloudflare protection detected.'));
+      }
+
+      if (cloudflareResult === undefined) {
+        yield* Effect.sync(() => task.log('Seems like we cannot access steamrip.com. Please check your internet connection and try again.'));
+        yield* Effect.sync(() => task.finish());
+        addon.notify({
+          message: 'Seems like we cannot access steamrip.com. Please check your internet connection and try again.',
+          id: 'steamrip-cloudflare-error',
+          type: 'error',
+        });
+        return;
       }
 
       yield* Effect.sync(() => task.log('Cleaning up expired scrapes...'));
