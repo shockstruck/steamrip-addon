@@ -1,9 +1,8 @@
-import { DLService, PUPPETEER_OPTIONS } from "./BaseService";
-import puppeteer from "puppeteer-extra";
-import { type Browser, type ElementHandle } from "puppeteer";
+import { DLService, PUPPETEER_OPTIONS, launchStandardBrowser } from "./BaseService";
 import { Effect, pipe } from "effect";
 import { BuzzHeavierError, DownloadCatcherError } from "../errors";
 import type { EventResponse, SearchResult } from "ogi-addon";
+import type { Browser, Page } from "puppeteer";
 
 export default class BuzzheavierService extends DLService {
   public constructor() {
@@ -17,19 +16,19 @@ export default class BuzzheavierService extends DLService {
     { name: string; url: string; headers: Record<string, string> }[],
     BuzzHeavierError | DownloadCatcherError
   > {
-    const acquireBrowser = Effect.tryPromise({
-      try: () => puppeteer.launch(PUPPETEER_OPTIONS),
+    const acquireConn = Effect.tryPromise({
+      try: async () => {
+        const { browser, page } = await launchStandardBrowser({ headless: true, args: PUPPETEER_OPTIONS.args });
+        return { browser, page } as { browser: Browser; page: Page };
+      },
       catch: (error) => new BuzzHeavierError({ url, error }),
     });
 
     return Effect.acquireUseRelease(
-      acquireBrowser,
-      (browser: Browser) =>
+      acquireConn,
+      ({ browser, page }) =>
         Effect.gen(function* (this: BuzzheavierService) {
-          const page = yield* Effect.tryPromise({
-            try: () => browser.newPage(),
-            catch: (error) => new BuzzHeavierError({ url, error }),
-          });
+          // page is provided by connect
 
           yield* Effect.tryPromise({
             try: () => page.goto(url),
@@ -50,7 +49,7 @@ export default class BuzzheavierService extends DLService {
 
           let downloadUrl: string | undefined;
           let lastError: unknown = undefined;
-          let downloadButton: ElementHandle<Element> | undefined;
+          let downloadButton: (Awaited<ReturnType<typeof page.$$>>)[number] | undefined;
 
           // Helper to find the download button
           const findDownloadButton = () =>
@@ -164,7 +163,7 @@ export default class BuzzheavierService extends DLService {
             },
           ];
         }.bind(this)),
-      (browser) => Effect.promise(() => browser.close())
+      ({ browser }) => Effect.promise(() => browser.close())
     );
   }
 }

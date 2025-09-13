@@ -1,8 +1,8 @@
 import type { Page } from "puppeteer";
 import readline from "readline";
-import puppeteer from "puppeteer-extra";
 import { PUPPETEER_OPTIONS } from "./services/BaseService";
 import { showInfoPopup } from "./popup-utils";
+import { connect } from "puppeteer-real-browser";
 
 /**
  * Shows an informational popup explaining what will happen with CLI captcha solving
@@ -154,11 +154,11 @@ export async function solveRecaptchaWithPopup(page: Page): Promise<string> {
   console.log("[steamrip-addon] Opening a clean captcha window for you to solve ...");
 
   // Launch a fresh Chromium instance with a clean, minimal UI
-  const browser = await puppeteer.launch({
-    ...PUPPETEER_OPTIONS,
+  const conn = await connect({
     headless: false,
     args: [
-      ...(PUPPETEER_OPTIONS?.args || []),
+      // Ensure visible window is not minimized
+      ...((PUPPETEER_OPTIONS?.args || []).filter(arg => arg !== '--start-minimized')),
       '--disable-web-security',
       '--disable-features=VizDisplayCompositor',
       '--disable-extensions',
@@ -179,8 +179,7 @@ export async function solveRecaptchaWithPopup(page: Page): Promise<string> {
       '--window-position=100,100'
     ]
   });
-  
-  const popupPage = await browser.newPage();
+  const { browser, page: popupPage } = conn;
   
   // Set up browser closure detection
   let browserClosed = false;

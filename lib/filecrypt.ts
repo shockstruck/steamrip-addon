@@ -1,11 +1,9 @@
 import type { Browser, Page } from "puppeteer";
-import puppeteer from "puppeteer-extra";
-import stealth from "puppeteer-extra-plugin-stealth";
-import adblock from "puppeteer-extra-plugin-adblocker";
-import { PUPPETEER_OPTIONS } from "./services/BaseService";
+import { PUPPETEER_OPTIONS, launchStandardBrowser } from "./services/BaseService";
 import { showInfoPopup } from "./popup-utils";
 import { Effect } from "effect";
 import { FileCryptBrowserClosedError, FileCryptRedirectError, FileCryptUrlError, NetworkError } from "./errors";
+import type { PageWithCursor } from "puppeteer-real-browser";
 
 /**
  * Detects if a URL is from filecrypt domain (any TLD)
@@ -68,11 +66,10 @@ export function processFilecryptUrl(url: string, options: FilecryptOptions = {})
     headless = false
   } = options;
 
-  const acquireBrowser = Effect.tryPromise({
-    try: () => {
-      puppeteer.use(stealth());
-      puppeteer.use(adblock({ blockTrackers: true }));
-      return puppeteer.launch({ ...PUPPETEER_OPTIONS, headless });
+  const acquireConn = Effect.tryPromise({
+    try: async () => {
+      const { browser, page } = await launchStandardBrowser({ headless, args: PUPPETEER_OPTIONS.args });
+      return { browser, page } as { browser: Browser; page: Page };
     },
     catch: (error) => new NetworkError({ url, error })
   });
@@ -81,13 +78,8 @@ export function processFilecryptUrl(url: string, options: FilecryptOptions = {})
     console.log(`[filecrypt] Processing filecrypt URL: ${url}`);
     
     return yield* Effect.acquireUseRelease(
-      acquireBrowser,
-      (browser: Browser) => Effect.gen(function*() {
-        const page = yield* Effect.tryPromise({
-          try: () => browser.newPage(),
-          catch: (error) => new NetworkError({ url, error })
-        });
-        
+      acquireConn,
+      ({ browser, page }) => Effect.gen(function*() {
         const finalUrl = yield* waitForFilecryptRedirect(page, url, redirectTimeout);
         
         if (isFilecryptUrl(finalUrl)) {
@@ -97,7 +89,7 @@ export function processFilecryptUrl(url: string, options: FilecryptOptions = {})
         console.log(`[filecrypt] Final download URL: ${finalUrl}`);
         return finalUrl;
       }),
-      (browser) => Effect.promise(() => browser.close())
+      ({ browser }) => Effect.promise(() => browser.close())
     );
   });
 }
@@ -105,7 +97,7 @@ export function processFilecryptUrl(url: string, options: FilecryptOptions = {})
 /**
  * Waits for filecrypt to automatically redirect to the final download URL
  */
-function waitForFilecryptRedirect(page: Page, initialUrl: string, timeout: number): Effect.Effect<string, FileCryptRedirectError | FileCryptBrowserClosedError> {
+function waitForFilecryptRedirect(page: PageWithCursor | Page, initialUrl: string, timeout: number): Effect.Effect<string, FileCryptRedirectError | FileCryptBrowserClosedError> {
   const poll = (startTime: number): Effect.Effect<string, FileCryptRedirectError | FileCryptBrowserClosedError> => 
     Effect.gen(function*() {
       if (Date.now() - startTime > timeout) {
@@ -125,7 +117,11 @@ function waitForFilecryptRedirect(page: Page, initialUrl: string, timeout: numbe
       }
 
       const navResult = yield* Effect.either(Effect.tryPromise({
-        try: () => page.waitForNavigation({ waitUntil: "networkidle2", timeout: 1000 }),
+        try: async () => {
+          // Avoid type collisions by indirectly awaiting the promise
+          const response = await (page as unknown as { waitForNavigation: (opts: any) => Promise<unknown> }).waitForNavigation({ waitUntil: "networkidle2", timeout: 1000 });
+          return response as unknown;
+        },
         catch: () => new FileCryptRedirectError({ url: currentUrl })
       }));
 
@@ -144,7 +140,10 @@ function waitForFilecryptRedirect(page: Page, initialUrl: string, timeout: numbe
     console.log(`[filecrypt] Loading page and waiting for redirect...`);
     
     yield* Effect.tryPromise({
-      try: () => page.goto(initialUrl, { waitUntil: "networkidle2", timeout: Math.min(timeout, 30000) }),
+      try: async () => {
+        await (page as unknown as { goto: (url: string, opts: any) => Promise<unknown> }).goto(initialUrl, { waitUntil: "networkidle2", timeout: Math.min(timeout, 30000) });
+        return null as unknown;
+      },
       catch: () => new FileCryptRedirectError({ url: initialUrl })
     });
 

@@ -7,11 +7,12 @@
     "axios": "^1.11.0",
     "effect": "^3.17.13",
     "jsdom": "^26.1.0",
-    "ogi-addon": "^1.7.0",
+    "ogi-addon": "^1.7.2",
     "puppeteer": "^24.19.0",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-adblocker": "^2.13.6",
-    "puppeteer-extra-plugin-stealth": "^2.11.2"
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "puppeteer-real-browser": "^1.4.4"
   },
   "scripts": {
     "recaptcha-demo": "bun run examples/recaptcha-demo.ts",

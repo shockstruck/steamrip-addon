@@ -1,10 +1,15 @@
-import { Effect } from "effect";
+import { Data, Effect } from "effect";
 import type OGIAddon from "ogi-addon";
-import puppeteer from "puppeteer-extra";
 import { headerManager, convertPuppeteerCookies } from "./header-manager";
 import axios, { type AxiosResponse } from "axios";
-import stealth from "puppeteer-extra-plugin-stealth";
 import type { Page } from "puppeteer";
+import { connect, type PageWithCursor } from "puppeteer-real-browser";
+import { PUPPETEER_OPTIONS } from "./services/BaseService";
+
+export class CloudflareTestError extends Data.TaggedError('CloudflareTestError')<{
+  url: string;
+  error: unknown;
+}> {}
 
 export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(function* () {
   // Load existing headers first
@@ -25,57 +30,56 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
   
   // If we already have valid Cloudflare headers, test them first
   if (hasValidCloudflareHeaders()) {
-    try {
-      // Test if existing headers are still valid
-      const testResponse = yield* Effect.tryPromise({
-        try: () => axios.get(url, { 
-          headers: headerManager.getHeaderObject(),
-          timeout: 10000 
-        }),
-        catch: () => undefined 
-      });
+    // Test if existing headers are still valid
+    const testResponse = yield* Effect.tryPromise({
+      try: () => axios.get(url, { 
+        headers: headerManager.getHeaderObject(),
+        timeout: 10000,
+      }),
+      catch: () => undefined
+    }).pipe(Effect.catchAll((err) => {
+      console.log('Error:', err);
+      return Effect.succeed(undefined);
+    }));
 
-      if (!testResponse) {
-        return Effect.fail(new Error('Test request failed'));
-      }
-      
-      // If we get a successful response without Cloudflare, headers are still valid
-      if (testResponse.status === 200 && !(testResponse.data as string).includes('Cloudflare')) {
-        return headerManager.getHeaders(); // Return the valid headers instead of null
-      }
-    } catch (error) {
-      // Headers are invalid, proceed with solving
+    if (!testResponse) {
+      console.log('Test request failed');
+    } else if (testResponse.status === 200 && !(testResponse.data as string).includes('Cloudflare')) {
+      return headerManager.getHeaders(); // Return the valid headers instead of null
     }
   }
 
   // check using axios to see if we can just get the page
-  const testResponse = yield* Effect.tryPromise({
-    try: async () => {
-      const response = await axios.get(url, { 
-        headers: headerManager.getHeaderObject(),
-        timeout: 10000 
-      });
-      return response.status === 200 && !(response.data as string).includes('Cloudflare');
-    },
-    catch: () => false
-  });
+  console.log('Checking if we can just get the page');
+  const testResponse = yield* Effect.tryPromise(async () => {
+    const response = await axios.get(url, { 
+      headers: headerManager.getHeaderObject(),
+      timeout: 10000,
+    });
+    console.log('Response:', response);
+    return response.status === 200 && !(response.data as string).includes('Cloudflare');
+  }).pipe(Effect.catchAll((err) => {
+    console.log('Error:', err);
+    return Effect.succeed(false);
+  }));
+  console.log('testResponse:', testResponse);
 
   if (testResponse) {
     headerManager.requiresCloudflare = false;
     return headerManager.getHeaders();
   }
 
-  puppeteer.use(stealth());
+  const headlessConn = yield* Effect.tryPromise(() => connect({ headless: true, disableXvfb: true, args: PUPPETEER_OPTIONS.args })).pipe(Effect.catchAll((err) => {
+    console.log('Error:', err);
+    return Effect.succeed(undefined);
+  }));
   
-  const browserHeadless = yield* Effect.tryPromise({
-    try: () => puppeteer.launch({ headless: true }),
-    catch: () => new Error('Failed to launch headless browser')
-  });
-  
-  const page = yield* Effect.tryPromise({
-    try: () => browserHeadless.newPage(),
-    catch: () => new Error('Failed to create new page')
-  });
+  if (!headlessConn) {
+    console.log('Failed to launch headless browser');
+    return undefined;
+  }
+
+  const { browser: browserHeadless, page } = headlessConn;
 
   // Set up request interception to capture headers
   const capturedHeaders: Record<string, string> = {};
@@ -101,7 +105,7 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
     catch: () => new Error('Failed to navigate to URL')
   });
 
-  const contentWaiter = (timeoutSeconds: number, page: Page) => Effect.gen(function* () {
+  const contentWaiter = (timeoutSeconds: number, page: PageWithCursor | Page) => Effect.gen(function* () {
     const maxAttempts = timeoutSeconds * 10;
     let attempts = 0;
     
@@ -150,15 +154,12 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
       catch: () => new Error('Failed to close headless browser')
     });
     
-    const browser = yield* Effect.tryPromise({
-      try: () => puppeteer.launch({ headless: false }),
+    const visibleConn = yield* Effect.tryPromise({
+      try: () => connect({ headless: false, turnstile: true, disableXvfb: true, args: [ ...(PUPPETEER_OPTIONS.args || [])] }),
       catch: () => new Error('Failed to launch browser')
     });
-    
-    const visiblePage = yield* Effect.tryPromise({
-      try: () => browser.newPage(),
-      catch: () => new Error('Failed to create new page')
-    });
+
+    const { browser, page: visiblePage } = visibleConn;
 
     // Set up request interception for visible page too
     const visibleCapturedHeaders: Record<string, string> = {};
@@ -202,10 +203,11 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
     } else {
       // Capture all headers from the visible page
       const headers = yield* captureBrowserHeaders(visiblePage, visibleCapturedHeaders);
+      console.log('Headers:', headers);
 
       // Verify we have Cloudflare headers before storing
-      const cloudflareCookies = headers.cookies.filter(cookie => 
-        cookie.name.includes('cf_') || 
+      const cloudflareCookies = headers.cookies.filter(cookie =>
+        cookie.name.includes('cf_') ||
         cookie.name.includes('__cf') ||
         cookie.name.includes('cloudflare') ||
         cookie.name === 'cf_clearance'
@@ -278,7 +280,7 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
 });
 
 // Helper function to capture all headers from a browser page
-const captureBrowserHeaders = (page: Page, capturedHeaders: Record<string, string> = {}) => Effect.gen(function* () {
+const captureBrowserHeaders = (page: PageWithCursor, capturedHeaders: Record<string, string> = {}) => Effect.gen(function* () {
   // Get cookies
   const cookies = yield* Effect.tryPromise({
     try: () => page.cookies(),
@@ -286,7 +288,8 @@ const captureBrowserHeaders = (page: Page, capturedHeaders: Record<string, strin
   });
 
   // Filter down to steamrip cookies
-  const steamripCookies = cookies.filter(cookie => cookie.name.includes('steamrip'));
+  console.log('Cookies:', cookies);
+  const steamripCookies = cookies.filter(cookie => cookie.domain.includes('steamrip.com'));
   const convertedCookies = convertPuppeteerCookies(steamripCookies);
 
   // Get user agent and other browser headers

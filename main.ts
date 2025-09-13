@@ -1,8 +1,5 @@
 import OGIAddon, { ConfigurationBuilder, SearchTool, type SearchResult } from "ogi-addon";
 import Scraper from "./lib/scraper";
-import puppeteer from "puppeteer-extra";
-import stealth from "puppeteer-extra-plugin-stealth";
-import adblock from "puppeteer-extra-plugin-adblocker";
 import { getService, getServiceNameFromUrl } from "./lib/services/matcher";
 import FileCryptService from "./lib/services/FileCrypt";
 import { Context, Effect, Layer, Match, pipe } from "effect";
@@ -14,8 +11,10 @@ import * as fs from 'fs/promises';
 import { existsSync, type Stats } from "fs";
 import axios from "axios";
 import { Stream } from "stream";
-import { cloudflareSolve } from "./lib/cloudflare";
+import { cloudflareSolve, CloudflareTestError } from "./lib/cloudflare";
 import { headerManager } from "./lib/header-manager";
+import { connect } from "puppeteer-real-browser";
+import { PUPPETEER_OPTIONS } from "./lib/services/BaseService";
 
 const baseAddon = new OGIAddon({
   name: 'Steamrip Tool',
@@ -28,7 +27,7 @@ const baseAddon = new OGIAddon({
 
 });
 
-class AddonService extends Context.Tag('AddonService')<AddonService, {
+export class AddonService extends Context.Tag('AddonService')<AddonService, {
   addon: OGIAddon,
   stringSimilarity: (a: string, b: string) => number
 }>() {}
@@ -134,8 +133,6 @@ const addonService = Layer.succeed(AddonService, {
 
 
 const program = Effect.gen(function* () {
-  puppeteer.use(stealth());
-  puppeteer.use(adblock());
 
   const scraper = new Scraper();
   const search = new SearchTool<{ name: string, url: string }>([], ['name']);
@@ -155,14 +152,63 @@ const program = Effect.gen(function* () {
       .setDescription('Clear stored Cloudflare cookies on next connect (useful if you encounter issues).')
       .setDefaultValue(false)
     )
+    .addBooleanOption(option => option
+      .setName('ignoreChromium')
+      .setDisplayName('Ignore Chromium')
+      .setDescription('Ignore Chromium errors and don\'t solve Cloudflare protection (WILL STOP ADDON).')
+      .setDefaultValue(false)
+    )
   )
 
-  addon.on('connect', () => {
+  addon.on('connect', (event) => {
     const connectEffect = Effect.fn('connectEffect')(function*() {
       const task = yield* Effect.tryPromise({
         try: () => addon.task(),
         catch: () => new Error('Failed to create task') // Define a specific error if needed
       });
+      // check if we're on linux, and if so, run CHROME_PATH="$(flatpak info --show-location org.chromium.Chromium)/files/chromium/chrome" to set the chrome path
+      if (process.platform === 'linux') {
+        console.log('Setting CHROME_PATH for this device.');
+        yield* Effect.try(() => {
+            const flatpakPath = execSync('flatpak info --show-location org.chromium.Chromium').toString().trim();
+            process.env.CHROME_PATH = join(flatpakPath, 'files', 'chromium', 'chrome');
+            return Effect.succeed(undefined);
+        }).pipe(Effect.catchAll((err) => {
+          console.log('Error in setting CHROME_PATH for this device. Hopefully everything still works..', err);
+          return Effect.succeed(undefined);
+        }));
+        console.log('CHROME_PATH set to', process.env.CHROME_PATH);
+      }
+      // check if chrome is installed on the device, and we can spawn a puppeteer-real-browser process
+      const chromeInstalled = yield* Effect.tryPromise(() => connect({ headless: true, disableXvfb: true, args: PUPPETEER_OPTIONS.args })).pipe(Effect.catchAll((err) => {
+        console.log('Error:', err);
+        return Effect.succeed(undefined);
+      }));
+      if (!chromeInstalled) {
+        yield* Effect.sync(() => task.log('Chrome/Chromium is not installed on the device. Please install it and try again.'));
+        yield* Effect.sync(() => task.finish());
+        yield* Effect.sync(() => addon.notify({
+          message: 'Steamrip requires Chrome/Chromium to be installed on the device for accessing Steamrip.com',
+          id: 'str-chrome-not-installed',
+          type: 'error',
+        }));
+
+        if (addon.config.getBooleanValue('ignoreChromium') ?? false) {
+          yield* Effect.sync(() => task.log('Ignoring Chromium errors and stopping...'));
+          return;
+        }
+        yield* Effect.promise(async () => await event.askForInput('(1/3) Chrome/Chromium is not installed', 'Steamrip Addon requires Chrome/Chromium to be installed on the device for accessing Steamrip.com', new ConfigurationBuilder()));
+        if (process.platform === 'linux') {
+          yield* Effect.promise(async () => await event.askForInput('(2/3) Chrome/Chromium is not installed', 'Because you are on Linux, download the Flatpak version of Chromium from Discover or the CLI using flatpak install flathub org.chromium.Chromium', new ConfigurationBuilder()));
+          yield* Effect.promise(async () => await event.askForInput('(3/3) Chrome/Chromium is not installed', 'Once you have installed it, please restart the addon server and try again.', new ConfigurationBuilder()));
+        }
+        return;
+      }
+      yield* Effect.sync(() => task.log('Chrome is installed on the device.'));
+      console.log('Chrome is installed on the device.');
+      yield* Effect.promise(async () => await chromeInstalled.browser.close());
+
+
 
       yield* Effect.sync(() => task.log('Checking Cloudflare protection...'));
       
@@ -176,7 +222,12 @@ const program = Effect.gen(function* () {
       yield* headerManager.loadHeaders();
       
       // Check if we need to solve Cloudflare
-      const cloudflareResult = yield* cloudflareSolve('https://steamrip.com', addon).pipe(Effect.catchAll(e => Effect.succeed(undefined)));
+      const cloudflareResult = yield* pipe(
+        cloudflareSolve('https://steamrip.com', addon),
+        Effect.catchAll((er) => {
+          return Effect.succeed(undefined);
+        })
+      );
       
       if (cloudflareResult) {
         yield* Effect.sync(() => task.log('Cloudflare headers obtained and stored.'));
@@ -207,6 +258,11 @@ const program = Effect.gen(function* () {
       yield* Effect.sync(() => task.log('Processing local catalog...'));
       yield* scraper.processLocals();
       yield* Effect.sync(() => search.addItems(scraper.catalog.games));
+      yield* Effect.sync(() => addon.notify({
+        message: 'Steamrip Cloudflare Solved.',
+        id: 'steamrip-cloudflare-solved',
+        type: 'success',
+      }));
       yield* Effect.sync(() => task.finish());
     });
 
