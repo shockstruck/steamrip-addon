@@ -1,5 +1,5 @@
-import puppeteer from "puppeteer-extra";
 import { PUPPETEER_OPTIONS } from "./services/BaseService";
+import { connect } from "puppeteer-real-browser";
 
 export interface PopupConfig {
   title: string;
@@ -27,17 +27,17 @@ export async function showInfoPopup(config: PopupConfig): Promise<void> {
   
   const windowSize = config.windowSize || { width: 500, height: 400 };
   
-  const browser = await puppeteer.launch({
-    ...PUPPETEER_OPTIONS,
+  const conn = await connect({
     headless: false,
     args: [
-      ...(PUPPETEER_OPTIONS?.args || []),
+      // Ensure visible info popup is not minimized
+      ...((PUPPETEER_OPTIONS?.args || []).filter(arg => arg !== '--start-minimized')),
       `--window-size=${windowSize.width},${windowSize.height}`,
       '--window-position=200,200'
     ]
   });
 
-  const page = await browser.newPage();
+  const { browser, page } = conn as { browser: any; page: any };
   await page.setViewport(windowSize);
 
   // Set up browser closure detection

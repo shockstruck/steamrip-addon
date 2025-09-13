@@ -7,12 +7,7 @@
 import Scraper from '../lib/scraper';
 import { describe, it, expect } from 'bun:test';
 import BuzzHeavierService from '../lib/services/BuzzHeavier';
-import puppeteer from 'puppeteer-extra';
-import stealth from 'puppeteer-extra-plugin-stealth';
-import adblock from 'puppeteer-extra-plugin-adblocker';
 
-puppeteer.use(stealth());
-puppeteer.use(adblock());
 
 type ValidLink = 'steamrip' | 'buzzheavier' | '1fichier' | 'pixeldrain' | 'gofile' | 'filecrypt-test';
 const emptyEvent = new EventResponse<SearchResult>((_, _1, _2) => Promise.resolve({}));

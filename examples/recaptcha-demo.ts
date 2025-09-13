@@ -1,7 +1,7 @@
-import puppeteer from "puppeteer-extra";
 import { solveRecaptchaWithPopup } from "../lib/captcha";
 import { PUPPETEER_OPTIONS } from "../lib/services/BaseService";
 import type { Page } from "puppeteer";
+import { connect } from "puppeteer-real-browser";
 
 async function solveCaptchaAndSubmit(page: Page) {
   console.log("[recaptcha-demo] Navigated to demo page.");
@@ -29,8 +29,7 @@ async function solveCaptchaAndSubmit(page: Page) {
 }
 
 async function main() {
-  const browser = await puppeteer.launch(PUPPETEER_OPTIONS);
-  const page = await browser.newPage();
+  const { browser, page } = await connect({ headless: PUPPETEER_OPTIONS.headless, args: PUPPETEER_OPTIONS.args });
   try {
     await page.goto("https://www.google.com/recaptcha/api2/demo", {
       waitUntil: "networkidle2",
