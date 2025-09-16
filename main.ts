@@ -777,7 +777,7 @@ const program = Effect.gen(function* () {
         input.cwd = join(path, autoFoundGameFolder);
       }
 
-      if (executables.length >= 0 && executables.length !== 1) {
+      if (executables.length >= 0 && executables.length !== 1 && !String(input.executable).startsWith(path)) {
         // match the input.executable to an actual path
         input.executable = join(path, input.executable as string);
       }
@@ -812,6 +812,8 @@ const program = Effect.gen(function* () {
         redistributables: commonRedistExecutables,
         launchArguments: '%command%'
       };
+
+      console.log("Response", response);
       return yield* Effect.succeed(response);
     });
 
