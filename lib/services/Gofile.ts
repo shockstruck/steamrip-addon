@@ -29,7 +29,7 @@ export default class GofileService extends DLService {
   private authToken: string | null = null;
 
   public constructor() {
-    super('Gofile', 10);
+    super('Gofile', 7);
   }
 
   scrapeDownloadLinks(
