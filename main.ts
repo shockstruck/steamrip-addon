@@ -1,4 +1,4 @@
-import OGIAddon, { ConfigurationBuilder, SearchTool, type SearchResult } from "ogi-addon";
+import OGIAddon, { ConfigurationBuilder, EventResponse, SearchTool, type SearchResult } from "ogi-addon";
 import Scraper from "./lib/scraper";
 import { getService, getServiceNameFromUrl } from "./lib/services/matcher";
 import FileCryptService from "./lib/services/FileCrypt";
@@ -141,21 +141,15 @@ const program = Effect.gen(function* () {
   
   addon.on('configure', (config) => config
     .addBooleanOption(option => option
+      .setName('manualSelect')
+      .setDisplayName('Service Selection')
+      .setDescription('Manually select the service you want to use for downloading games. Useful for services who rate limit or have download limits.')
+      .setDefaultValue(false)
+    )
+    .addBooleanOption(option => option
       .setName('disallowCaptchaBased')
       .setDisplayName('Disallow Captcha Based Services')
       .setDescription('Disallow services that require a captcha to be solved.')
-      .setDefaultValue(false)
-    )
-    .addBooleanOption(option => option
-      .setName('clearCloudflareCookies')
-      .setDisplayName('Clear Cloudflare Cookies')
-      .setDescription('Clear stored Cloudflare cookies on next connect (useful if you encounter issues).')
-      .setDefaultValue(false)
-    )
-    .addBooleanOption(option => option
-      .setName('ignoreChromium')
-      .setDisplayName('Ignore Chromium')
-      .setDescription('Ignore Chromium errors and don\'t solve Cloudflare protection (WILL STOP ADDON).')
       .setDefaultValue(false)
     )
   )
@@ -170,9 +164,8 @@ const program = Effect.gen(function* () {
       if (process.platform === 'linux') {
         console.log('Setting CHROME_PATH for this device.');
         yield* Effect.try(() => {
-            const flatpakPath = execSync('flatpak info --show-location org.chromium.Chromium').toString().trim();
-            process.env.CHROME_PATH = join(flatpakPath, 'files', 'chromium', 'chrome');
-            return Effect.succeed(undefined);
+          const flatpakPath = execSync('flatpak info --show-location org.chromium.Chromium').toString().trim();
+          process.env.CHROME_PATH = join(flatpakPath, 'files', 'chromium', 'chrome');
         }).pipe(Effect.catchAll((err) => {
           console.log('Error in setting CHROME_PATH for this device. Hopefully everything still works..', err);
           return Effect.succeed(undefined);
@@ -193,13 +186,13 @@ const program = Effect.gen(function* () {
           type: 'error',
         }));
 
-        if (addon.config.getBooleanValue('ignoreChromium') ?? false) {
-          yield* Effect.sync(() => task.log('Ignoring Chromium errors and stopping...'));
-          return;
-        }
         yield* Effect.promise(async () => await event.askForInput('(1/3) Chrome/Chromium is not installed', 'Steamrip Addon requires Chrome/Chromium to be installed on the device for accessing Steamrip.com', new ConfigurationBuilder()));
         if (process.platform === 'linux') {
           yield* Effect.promise(async () => await event.askForInput('(2/3) Chrome/Chromium is not installed', 'Because you are on Linux, download the Flatpak version of Chromium from Discover or the CLI using flatpak install flathub org.chromium.Chromium', new ConfigurationBuilder()));
+          yield* Effect.promise(async () => await event.askForInput('(3/3) Chrome/Chromium is not installed', 'Once you have installed it, please restart the addon server and try again.', new ConfigurationBuilder()));
+        }
+        else {
+          yield* Effect.promise(async () => await event.askForInput('(2/3) Chrome/Chromium is not installed', 'Because you are on Windows, download the Chrome browser from the official website and install it.', new ConfigurationBuilder()));
           yield* Effect.promise(async () => await event.askForInput('(3/3) Chrome/Chromium is not installed', 'Once you have installed it, please restart the addon server and try again.', new ConfigurationBuilder()));
         }
         return;
@@ -212,11 +205,11 @@ const program = Effect.gen(function* () {
 
       yield* Effect.sync(() => task.log('Checking Cloudflare protection...'));
       
-      // // Check if user wants to clear headers
-      if (addon.config.getBooleanValue('clearCloudflareCookies') ?? false) {
-        yield* Effect.sync(() => task.log('Clearing Cloudflare headers as requested...'));
-        yield* headerManager.clearHeaders();
-      }
+      // Check if user wants to clear headers
+      // if (addon.config.getBooleanValue('clearCloudflareCookies') ?? false) {
+      //   yield* Effect.sync(() => task.log('Clearing Cloudflare headers as requested...'));
+      //   yield* headerManager.clearHeaders();
+      // }
       
       // Load existing headers first
       yield* headerManager.loadHeaders();
@@ -369,25 +362,59 @@ const program = Effect.gen(function* () {
       catch: (e) => e instanceof NoGameFoundError ? e : new ScrapeGameDownloadsError({ game: String(appID) })
     });
 
-    const findWorkingService = Effect.fn('findWorkingService')(function*(links: { service: string; url: string }[]) {
-      const services = yield* pipe( 
-        links,
-        Effect.forEach(link => Effect.gen(function*() {
-          console.log("Link", link);
-          const serviceName = getServiceNameFromUrl(link.url);
-          if (!serviceName) return null;
-          const service = yield* getService(serviceName);
-          return { name: serviceName, url: link.url, priority: service.priority };
-        })),
-        Effect.andThen(services => Effect.succeed(services.filter(s => !!s))),
-        // priority is sorted from highest to lowest
-        Effect.andThen(services => Effect.succeed(services.sort((a, b) => b.priority - a.priority)))
+    const findWorkingService = Effect.fn('findWorkingService')(function*(links: { service: string; url: string }[], event: EventResponse<SearchResult>) {
+      // Use correct effect piping, types, and avoid 'any'
+
+      type Link = { service: string; url: string };
+      type ServiceInfo = { name: string; url: string; priority: number };
+
+      const services = yield* pipe(
+        Effect.succeed(links as Link[]),
+        Effect.andThen((links) => {
+          if (addon.config.getBooleanValue('manualSelect') ?? false) {
+            return Effect.promise(async () => {
+              const options = links.map(link => link.service);
+              const config = new ConfigurationBuilder();
+              config.addStringOption(option =>
+                option
+                  .setName('service')
+                  .setDisplayName('Service')
+                  .setDescription('Please select the service you want to use for downloading this game.')
+                  .setAllowedValues(options)
+              );
+              const input = await event.askForInput(
+                'Manual Service Selection',
+                'Please select the service you want to use for downloading this game.',
+                config
+              );
+              const selectedLink = links.find(link => link.service === input.service);
+              return selectedLink ? [selectedLink] : links;
+            });
+          }
+          return Effect.succeed(links);
+        }),
+        Effect.andThen((links) =>
+          Effect.forEach(links, (link) =>
+            Effect.gen(function* () {
+              const serviceName = getServiceNameFromUrl(link.url);
+              if (!serviceName) return null;
+              const service = yield* getService(serviceName);
+              return {
+                name: serviceName,
+                url: link.url,
+                priority: service.priority
+              } as ServiceInfo;
+            })
+          )
+        ),
+        Effect.map((serviceInfos) =>
+          serviceInfos
+            .filter((s): s is ServiceInfo => !!s)
+            .sort((a, b) => b.priority - a.priority)
+        )
       );
 
-      // Try each service in order, breaking out as soon as one works, using Effect for error handling
-      // Fix: Avoid double-calling the for loop by not nesting Effect.gen inside Effect.either inside the for loop.
-      // Instead, just use a single Effect.gen per service, and handle errors with try/catch.
-      return Effect.gen(function*() {
+      return yield* Effect.gen(function*() {
         let lastError: unknown = null;
         console.log("Services", services);
         for (const serviceInfo of services) {
@@ -478,11 +505,8 @@ const program = Effect.gen(function* () {
     const requestDlEffect = Effect.fn('requestDlEffect')(function*() {
       const links = yield* getDownloadLinks;
       
-      const downloadDetailsEither = yield* Effect.either(findWorkingService(yield* links));
-      if (downloadDetailsEither._tag === 'Left') {
-        return yield* Effect.fail(downloadDetailsEither.left);
-      }
-      const downloadDetails = yield* downloadDetailsEither.right;
+      const downloadDetails = yield* findWorkingService(yield* links, event);
+      
       
       return {
         downloadType: 'direct',
@@ -622,17 +646,17 @@ const program = Effect.gen(function* () {
         folders,
         Effect.forEach(folder => Effect.tryPromise({
           try: async () => [ folder, await fs.stat(join(path, folder)) ] as [string, Stats],
-          catch: () => Effect.succeed(undefined)
-        })),
+          catch: () => undefined
+        }), { concurrency: 'unbounded' }),
         // filter to only folders
-        Effect.andThen(folders => Effect.succeed(folders.filter(folder => folder && folder[1].isDirectory()))),
+        Effect.map(folders => folders.filter(folder => folder && folder[1].isDirectory())),
         // Now check if there are 2 folders, and one is the _CommonRedist folder and the other is the game folder
-        Effect.andThen(folders => {
-          if (folders.length !== 2) return Effect.succeed(undefined);
+        Effect.map(folders => {
+          if (folders.length !== 2) return undefined;
           if (folders.some(folder => folder[0] === '_CommonRedist') && folders.some(folder => folder[0] !== '_CommonRedist')) {
-            return Effect.succeed(folders.find(folder => folder[0] !== '_CommonRedist')?.[0]);
+            return folders.find(folder => folder[0] !== '_CommonRedist')?.[0];
           }
-          return Effect.succeed(undefined);
+          return undefined;
         }),
       );
 
@@ -644,12 +668,12 @@ const program = Effect.gen(function* () {
             try: async () => await fs.readdir(join(path, autoFoundGameFolder as string)),
             catch: () => []
           }),
-          Effect.andThen(executables => Effect.succeed(executables.filter(executable => executable.endsWith('.exe')))),
+          Effect.map(executables => executables.filter(executable => executable.endsWith('.exe'))),
           // remove UnityCrashHandler
-          Effect.andThen(executables => Effect.succeed(executables.filter(executable => !executable.toLowerCase().includes('unitycrashhandler')))),
+          Effect.map(executables => executables.filter(executable => !executable.toLowerCase().includes('unitycrashhandler'))),
           // remove uninstall00.exe
-          Effect.andThen(executables => Effect.succeed(executables.filter(executable => !executable.toLowerCase().includes('unins000.exe')))),
-          Effect.andThen(executables => Effect.succeed(executables.map(executable => join(path, autoFoundGameFolder as string, executable))))
+          Effect.map(executables => executables.filter(executable => !executable.toLowerCase().includes('unins000.exe'))),
+          Effect.map(executables => executables.map(executable => join(path, autoFoundGameFolder as string, executable)))
         );
         console.log("Found executables", executables);
         if (executables.length === 0) {
