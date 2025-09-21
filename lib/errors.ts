@@ -90,3 +90,8 @@ export class CommonRedistError extends Data.TaggedError('CommonRedistError')<{
   path: string;
   error: string;
 }> {}
+
+export class MegaDBError extends Data.TaggedError('MegaDBError')<{
+  url: string;
+  error: unknown;
+}> {}

@@ -8,6 +8,7 @@ import GofileService from "./Gofile";
 import { Effect } from "effect";
 import { InvalidUrlError, NoServiceFoundError, UnknownServiceError } from "../errors";
 import PixelDrainService from "./PixelDrain";
+import MegaDBService from "./MegaDB";
 
 export const getService = (name: string) => Effect.gen(function*() {
   switch (name) {
@@ -21,6 +22,8 @@ export const getService = (name: string) => Effect.gen(function*() {
       return yield* Effect.succeed(new GofileService());
     case 'PixelDrain':
       return yield* Effect.succeed(new PixelDrainService());
+    case 'MegaDB':
+      return yield* Effect.succeed(new MegaDBService());
     default:
       return yield* Effect.fail(new UnknownServiceError({ name }));
   }
@@ -53,6 +56,14 @@ export const detectServiceFromUrl = (url: string) => Effect.gen(function* () {
   if (hostname.includes('gofile')) {
     return yield* Effect.succeed(new GofileService());
   }
+
+  if (hostname.includes('pixeldrain')) {
+    return yield* Effect.succeed(new PixelDrainService());
+  }
+
+  if (hostname.includes('megadb')) {
+    return yield* Effect.succeed(new MegaDBService());
+  }
   
   return yield* Effect.fail(new NoServiceFoundError());
 });
@@ -84,6 +95,10 @@ export function getServiceNameFromUrl(url: string): string | null {
     }
     if (hostname.includes('pixeldrain')) {
       return 'PixelDrain';
+    }
+
+    if (hostname.includes('megadb')) {
+      return 'MegaDB';
     }
     
     return null;
