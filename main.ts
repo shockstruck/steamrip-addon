@@ -766,7 +766,7 @@ const program = Effect.gen(function* () {
           // append to the front dotnet
           commonRedistExecutables = [ { name: 'dotnet48', path: 'winetricks' }, ...commonRedistExecutables ]
           // apply dotnet20 to the back
-          commonRedistExecutables = [ ...commonRedistExecutables, { name: 'dotnet20', path: 'winetricks' } ]
+          // commonRedistExecutables = [ ...commonRedistExecutables, { name: 'dotnet20', path: 'winetricks' } ]
           // add dotnet-repair to the end
           commonRedistExecutables = [ ...commonRedistExecutables, { name: 'dotnet-repair', path: 'microsoft' } ]
           // remove everyting that's dxwebsetup
