@@ -807,9 +807,9 @@ const program = Effect.gen(function* () {
 
       // if there's a "winmm.dll" in the executable path, we need to add it to winedlls
       let winedlls: string[] = [];
-      for (const dllToAdd of [ 'winmm', 'steam_api64', 'onlinefix64']) {
+      for (const dllToAdd of [ 'winmm', 'steam_api64', 'OnlineFix64']) {
         if (existsSync(join(dirname(input.executable as string), dllToAdd + '.dll'))) {
-          winedlls.push(dllToAdd);
+          winedlls.push(dllToAdd.toLowerCase());
         }
       }
 
@@ -818,7 +818,7 @@ const program = Effect.gen(function* () {
         launchExecutable: input.executable as string,
         version: '1.0',
         redistributables: commonRedistExecutables,
-        launchArguments: (process.platform === 'linux' ? 'WINEDLLOVERRIDES="' + winedlls.join(',') + '=n,b"' : '') + '%command%'
+        launchArguments: (process.platform === 'linux' && winedlls.length > 0 ? 'WINEDLLOVERRIDES="' + winedlls.join(',') + '=n,b"' : '') + '%command%'
       };
 
       console.log("Response", response);
