@@ -126,6 +126,11 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
         } else if (previousUrl === currentUrl) {
           // Same URL, increment stable checks
           stableCloudflareChecks++;
+          // Provide feedback every 5 seconds (50 checks * 100ms)
+          if (stableCloudflareChecks % 50 === 0) {
+            const secondsWaiting = stableCloudflareChecks / 10;
+            console.log(`Still waiting on Cloudflare challenge (${secondsWaiting}s on same page)...`);
+          }
         }
         
         previousUrl = currentUrl;
@@ -165,12 +170,20 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
         console.log(`Waiting for redirect to steamrip.com... Current URL: ${currentUrl}`);
       }
 
+      // Provide timeout progress feedback
+      if (attempts % 100 === 0 && attempts > 0) {
+        const elapsedSeconds = attempts / 10;
+        const remainingSeconds = (maxAttempts - attempts) / 10;
+        console.log(`Cloudflare challenge progress: ${elapsedSeconds}s elapsed, ${remainingSeconds}s remaining (${currentUrl})`);
+      }
+
       // Wait 100ms before next attempt
       yield* Effect.sleep(100);
       attempts++;
     }
 
-    console.log('Timeout reached waiting for Cloudflare challenge to complete');
+    console.log(`Timeout reached waiting for Cloudflare challenge to complete after ${timeoutSeconds}s`);
+    console.log(`Final state: URL=${page.url()}, redirects=${cloudflareRedirectCount}, stable checks=${stableCloudflareChecks}`);
     return false;
   });
 

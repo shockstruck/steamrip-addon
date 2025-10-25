@@ -218,6 +218,7 @@ const program = Effect.gen(function* () {
       const cloudflareResult = yield* pipe(
         cloudflareSolve('https://steamrip.com', addon),
         Effect.catchAll((er) => {
+          console.error('Error solving Cloudflare:', er);
           return Effect.succeed(undefined);
         })
       );
