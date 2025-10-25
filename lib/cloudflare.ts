@@ -99,10 +99,14 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
       });
 
       // Get page content
-      const content = yield* Effect.tryPromise({
-        try: () => page.content(),
-        catch: () => new Error('Failed to get page content')
-      });
+      const content = yield* Effect.tryPromise(async () => await page.content()).pipe(Effect.catchAll((err) => {
+        console.log('Error:', err);
+        return Effect.succeed(undefined);
+      }));
+      if (!content) {
+        yield* Effect.sleep(500);
+        continue;
+      }
 
       // Check if we're on steamrip.com and not on a Cloudflare challenge page
       const onSteamrip = currentUrl.includes('steamrip.com');
