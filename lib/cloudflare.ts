@@ -322,7 +322,7 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
     catch: () => new Error('Failed to navigate to URL')
   });
 
-  const headlessResult = yield* contentWaiter(60, page);
+  const headlessResult = yield* contentWaiter(7, page);
   
   if (!headlessResult) {
     yield* Effect.sync(() => addon.notify({
