@@ -108,35 +108,50 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
   const contentWaiter = (timeoutSeconds: number, page: PageWithCursor | Page) => Effect.gen(function* () {
     const maxAttempts = timeoutSeconds * 10;
     let attempts = 0;
-    
+
     while (attempts < maxAttempts) {
       // Check if page is closed
       const isClosed = yield* Effect.tryPromise({
         try: () => Promise.resolve(page.isClosed()),
         catch: () => new Error('Failed to check if page is closed')
       });
-      
+
       if (isClosed) {
         return false;
       }
-      
+
+      // Get current URL to check if we're on steamrip.com
+      const currentUrl = yield* Effect.try({
+        try: () => page.url(),
+        catch: () => new Error('Failed to get page URL')
+      });
+
       // Get page content
       const content = yield* Effect.tryPromise({
         try: () => page.content(),
         catch: () => new Error('Failed to get page content')
       });
-      
-      if (!content.includes('Cloudflare')) {
-        console.log('Cloudflare solved');
-        console.log(content);
+
+      // Check if we're on steamrip.com and not on a Cloudflare challenge page
+      const onSteamrip = currentUrl.includes('steamrip.com');
+      const hasCloudflareChallenge = content.includes('Cloudflare') || content.includes('Just a moment') || content.includes('Checking your browser');
+
+      if (onSteamrip && !hasCloudflareChallenge) {
+        console.log('Successfully reached steamrip.com, Cloudflare solved');
+        console.log('Current URL:', currentUrl);
         return true;
       }
-      
+
+      // Log redirect attempts for debugging
+      if (!onSteamrip && attempts % 10 === 0) {
+        console.log(`Waiting for redirect to steamrip.com... Current URL: ${currentUrl}`);
+      }
+
       // Wait 100ms before next attempt
       yield* Effect.sleep(100);
       attempts++;
     }
-    
+
     return false;
   });
 
