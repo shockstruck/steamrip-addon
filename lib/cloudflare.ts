@@ -70,13 +70,112 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
   }
 
   const headlessConn = yield* Effect.tryPromise(() => connect({ headless: true, disableXvfb: true, args: PUPPETEER_OPTIONS.args })).pipe(Effect.catchAll((err) => {
-    console.log('Error:', err);
+    console.log('Failed to launch headless browser, will try visible browser:', err);
     return Effect.succeed(undefined);
   }));
-  
+
   if (!headlessConn) {
-    console.log('Failed to launch headless browser');
-    return undefined;
+    console.log('Headless browser failed to launch, attempting visible browser instead...');
+
+    // Try with visible browser directly
+    const visibleConn = yield* Effect.tryPromise({
+      try: () => connect({ headless: false, turnstile: true, disableXvfb: true, args: [ ...(PUPPETEER_OPTIONS.args || [])] }),
+      catch: (error) => new Error(`Failed to launch browser: ${error}`)
+    });
+
+    const { browser, page: visiblePage } = visibleConn;
+
+    // Set up request interception for visible page
+    const visibleCapturedHeaders: Record<string, string> = {};
+    yield* Effect.tryPromise({
+      try: () => visiblePage.setRequestInterception(true),
+      catch: () => new Error('Failed to set request interception')
+    });
+
+    visiblePage.on('request', (request) => {
+      // Capture headers from the first request to the target domain
+      if (request.url().includes('steamrip.com') && Object.keys(visibleCapturedHeaders).length === 0) {
+        Object.entries(request.headers()).forEach(([key, value]) => {
+          if (value) {
+            visibleCapturedHeaders[key] = value;
+          }
+        });
+      }
+      request.continue();
+    });
+
+    yield* Effect.tryPromise({
+      try: () => visiblePage.goto(url),
+      catch: () => new Error('Failed to navigate to URL')
+    });
+
+    yield* Effect.sync(() => addon.notify({
+      message: 'Headless browser failed. Please solve the Cloudflare challenge in the opened browser window.',
+      id: 'cloudflare-captcha',
+      type: 'warning',
+    }));
+
+    const visibleResult = yield* contentWaiter(60, visiblePage);
+
+    if (!visibleResult) {
+      // Immediately kill the browser window
+      yield* Effect.tryPromise({
+        try: async () => {
+          // Force close all pages first
+          const pages = await browser.pages();
+          await Promise.all(pages.map(p => p.close().catch(() => {})));
+          // Then close the browser
+          await browser.close();
+        },
+        catch: () => new Error('Failed to close browser')
+      });
+
+      yield* Effect.sync(() => addon.notify({
+        message: 'Failed to solve Cloudflare captcha.',
+        id: 'cloudflare-captcha',
+        type: 'error',
+      }));
+
+      throw new Error('Failed to solve Cloudflare captcha');
+    } else {
+      // Capture all headers from the visible page
+      const headers = yield* captureBrowserHeaders(visiblePage, visibleCapturedHeaders);
+      console.log('Headers:', headers);
+
+      // Verify we have Cloudflare headers before storing
+      const cloudflareCookies = headers.cookies.filter(cookie =>
+        cookie.name.includes('cf_') ||
+        cookie.name.includes('__cf') ||
+        cookie.name.includes('cloudflare') ||
+        cookie.name === 'cf_clearance'
+      );
+
+      if (cloudflareCookies.length === 0) {
+        yield* Effect.sync(() => addon.notify({
+          message: 'Cloudflare solve completed but no Cloudflare cookies found. Retrying...',
+          id: 'cloudflare-captcha',
+          type: 'warning',
+        }));
+
+        yield* Effect.tryPromise({
+          try: () => browser.close(),
+          catch: () => new Error('Failed to close browser')
+        });
+
+        throw new Error('No Cloudflare cookies found after solve');
+      }
+
+      // Store all headers
+      yield* headerManager.setHeaders(headers);
+
+      // Close browser after getting headers
+      yield* Effect.tryPromise({
+        try: () => browser.close(),
+        catch: () => new Error('Failed to close browser')
+      });
+
+      return headers;
+    }
   }
 
   const { browser: browserHeadless, page } = headlessConn;
