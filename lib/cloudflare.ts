@@ -108,6 +108,8 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
   const contentWaiter = (timeoutSeconds: number, page: PageWithCursor | Page) => Effect.gen(function* () {
     const maxAttempts = timeoutSeconds * 10;
     let attempts = 0;
+    let successfulChecks = 0;
+    const requiredSuccessfulChecks = 30; // 3 seconds of stable state (30 * 100ms)
 
     while (attempts < maxAttempts) {
       // Check if page is closed
@@ -137,9 +139,21 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
       const hasCloudflareChallenge = content.includes('Cloudflare') || content.includes('Just a moment') || content.includes('Checking your browser');
 
       if (onSteamrip && !hasCloudflareChallenge) {
-        console.log('Successfully reached steamrip.com, Cloudflare solved');
-        console.log('Current URL:', currentUrl);
-        return true;
+        successfulChecks++;
+        if (successfulChecks >= requiredSuccessfulChecks) {
+          console.log('Successfully reached steamrip.com, Cloudflare solved (stable for 3 seconds)');
+          console.log('Current URL:', currentUrl);
+          return true;
+        }
+        if (successfulChecks % 10 === 0) {
+          console.log(`Cloudflare challenge passed, confirming stability... (${successfulChecks}/${requiredSuccessfulChecks})`);
+        }
+      } else {
+        // Reset counter if we see Cloudflare again (handles page refreshes)
+        if (successfulChecks > 0) {
+          console.log('Cloudflare challenge detected again (page refresh), resetting stability counter');
+        }
+        successfulChecks = 0;
       }
 
       // Log redirect attempts for debugging
@@ -201,19 +215,26 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
     });
     
     const visibleResult = yield* contentWaiter(60, visiblePage);
-    
+
     if (!visibleResult) {
+      // Immediately kill the browser window
+      yield* Effect.tryPromise({
+        try: async () => {
+          // Force close all pages first
+          const pages = await browser.pages();
+          await Promise.all(pages.map(p => p.close().catch(() => {})));
+          // Then close the browser
+          await browser.close();
+        },
+        catch: () => new Error('Failed to close browser')
+      });
+
       yield* Effect.sync(() => addon.notify({
         message: 'Failed to solve Cloudflare captcha.',
         id: 'cloudflare-captcha',
-        type: 'warning',
+        type: 'error',
       }));
-      
-      yield* Effect.tryPromise({
-        try: () => browser.close(),
-        catch: () => new Error('Failed to close browser')
-      });
-      
+
       throw new Error('Failed to solve Cloudflare captcha');
     } else {
       // Capture all headers from the visible page
