@@ -69,6 +69,111 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
     return headerManager.getHeaders();
   }
 
+  // Define the content waiter function for monitoring Cloudflare challenge progress
+  const contentWaiter = (timeoutSeconds: number, page: PageWithCursor | Page) => Effect.gen(function* () {
+    const maxAttempts = timeoutSeconds * 10;
+    let attempts = 0;
+    let successfulChecks = 0;
+    const requiredSuccessfulChecks = 30; // 3 seconds of stable state (30 * 100ms)
+    let cloudflareRedirectCount = 0;
+    const maxCloudflareRedirects = 10;
+    let previousUrl = '';
+    let previousHadCloudflare = false;
+    let stableCloudflareChecks = 0; // Track how long we've been on the same Cloudflare page
+
+    while (attempts < maxAttempts) {
+      // Check if page is closed
+      const isClosed = yield* Effect.tryPromise({
+        try: () => Promise.resolve(page.isClosed()),
+        catch: () => new Error('Failed to check if page is closed')
+      });
+
+      if (isClosed) {
+        return false;
+      }
+
+      // Get current URL to check if we're on steamrip.com
+      const currentUrl = yield* Effect.try({
+        try: () => page.url(),
+        catch: () => new Error('Failed to get page URL')
+      });
+
+      // Get page content
+      const content = yield* Effect.tryPromise({
+        try: () => page.content(),
+        catch: () => new Error('Failed to get page content')
+      });
+
+      // Check if we're on steamrip.com and not on a Cloudflare challenge page
+      const onSteamrip = currentUrl.includes('steamrip.com');
+      const hasCloudflareChallenge = content.includes('Cloudflare') || content.includes('Just a moment') || content.includes('Checking your browser');
+
+      // Detect Cloudflare redirects/reloads
+      if (hasCloudflareChallenge) {
+        // Check if URL changed while we're still on a Cloudflare challenge
+        if (previousHadCloudflare && previousUrl !== currentUrl && previousUrl !== '') {
+          cloudflareRedirectCount++;
+          console.log(`Cloudflare redirect detected (${cloudflareRedirectCount}/${maxCloudflareRedirects}): ${previousUrl} → ${currentUrl}`);
+          
+          if (cloudflareRedirectCount >= maxCloudflareRedirects) {
+            console.log(`Maximum Cloudflare redirects (${maxCloudflareRedirects}) reached, giving up`);
+            return false;
+          }
+          
+          // Reset the attempts counter to give each redirect cycle a fresh timeout window
+          attempts = 0;
+          stableCloudflareChecks = 0;
+        } else if (previousUrl === currentUrl) {
+          // Same URL, increment stable checks
+          stableCloudflareChecks++;
+        }
+        
+        previousUrl = currentUrl;
+        previousHadCloudflare = true;
+        successfulChecks = 0;
+      } else if (onSteamrip && !hasCloudflareChallenge) {
+        // Successfully passed Cloudflare
+        successfulChecks++;
+        
+        // Also check if we went from Cloudflare to non-Cloudflare but then back to Cloudflare
+        if (previousHadCloudflare && successfulChecks === 1) {
+          console.log('Transitioned from Cloudflare challenge to actual site');
+        }
+        
+        if (successfulChecks >= requiredSuccessfulChecks) {
+          console.log('Successfully reached steamrip.com, Cloudflare solved (stable for 3 seconds)');
+          console.log('Current URL:', currentUrl);
+          return true;
+        }
+        if (successfulChecks % 10 === 0) {
+          console.log(`Cloudflare challenge passed, confirming stability... (${successfulChecks}/${requiredSuccessfulChecks})`);
+        }
+        
+        previousUrl = currentUrl;
+        previousHadCloudflare = false;
+        stableCloudflareChecks = 0;
+      } else {
+        // Not on steamrip yet
+        previousUrl = currentUrl;
+        previousHadCloudflare = false;
+        successfulChecks = 0;
+        stableCloudflareChecks = 0;
+      }
+
+      // Log redirect attempts for debugging
+      if (!onSteamrip && attempts % 10 === 0) {
+        console.log(`Waiting for redirect to steamrip.com... Current URL: ${currentUrl}`);
+      }
+
+      // Wait 100ms before next attempt
+      yield* Effect.sleep(100);
+      attempts++;
+    }
+
+    console.log('Timeout reached waiting for Cloudflare challenge to complete');
+    return false;
+  });
+
   const headlessConn = yield* Effect.tryPromise(() => connect({ headless: true, disableXvfb: true, args: PUPPETEER_OPTIONS.args })).pipe(Effect.catchAll((err) => {
     console.log('Failed to launch headless browser, will try visible browser:', err);
     return Effect.succeed(undefined);
@@ -202,70 +307,6 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
   yield* Effect.tryPromise({
     try: () => page.goto(url),
     catch: () => new Error('Failed to navigate to URL')
-  });
-
-  const contentWaiter = (timeoutSeconds: number, page: PageWithCursor | Page) => Effect.gen(function* () {
-    const maxAttempts = timeoutSeconds * 10;
-    let attempts = 0;
-    let successfulChecks = 0;
-    const requiredSuccessfulChecks = 30; // 3 seconds of stable state (30 * 100ms)
-
-    while (attempts < maxAttempts) {
-      // Check if page is closed
-      const isClosed = yield* Effect.tryPromise({
-        try: () => Promise.resolve(page.isClosed()),
-        catch: () => new Error('Failed to check if page is closed')
-      });
-
-      if (isClosed) {
-        return false;
-      }
-
-      // Get current URL to check if we're on steamrip.com
-      const currentUrl = yield* Effect.try({
-        try: () => page.url(),
-        catch: () => new Error('Failed to get page URL')
-      });
-
-      // Get page content
-      const content = yield* Effect.tryPromise({
-        try: () => page.content(),
-        catch: () => new Error('Failed to get page content')
-      });
-
-      // Check if we're on steamrip.com and not on a Cloudflare challenge page
-      const onSteamrip = currentUrl.includes('steamrip.com');
-      const hasCloudflareChallenge = content.includes('Cloudflare') || content.includes('Just a moment') || content.includes('Checking your browser');
-
-      if (onSteamrip && !hasCloudflareChallenge) {
-        successfulChecks++;
-        if (successfulChecks >= requiredSuccessfulChecks) {
-          console.log('Successfully reached steamrip.com, Cloudflare solved (stable for 3 seconds)');
-          console.log('Current URL:', currentUrl);
-          return true;
-        }
-        if (successfulChecks % 10 === 0) {
-          console.log(`Cloudflare challenge passed, confirming stability... (${successfulChecks}/${requiredSuccessfulChecks})`);
-        }
-      } else {
-        // Reset counter if we see Cloudflare again (handles page refreshes)
-        if (successfulChecks > 0) {
-          console.log('Cloudflare challenge detected again (page refresh), resetting stability counter');
-        }
-        successfulChecks = 0;
-      }
-
-      // Log redirect attempts for debugging
-      if (!onSteamrip && attempts % 10 === 0) {
-        console.log(`Waiting for redirect to steamrip.com... Current URL: ${currentUrl}`);
-      }
-
-      // Wait 100ms before next attempt
-      yield* Effect.sleep(100);
-      attempts++;
-    }
-
-    return false;
   });
 
   const headlessResult = yield* contentWaiter(7, page);
