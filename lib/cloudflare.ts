@@ -1,4 +1,4 @@
-import { Data, Effect } from "effect";
+import { Data, Effect, pipe } from "effect";
 import type OGIAddon from "ogi-addon";
 import { headerManager, convertPuppeteerCookies } from "./header-manager";
 import axios, { type AxiosResponse } from "axios";
@@ -322,7 +322,7 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
     catch: () => new Error('Failed to navigate to URL')
   });
 
-  const headlessResult = yield* contentWaiter(7, page);
+  const headlessResult = yield* contentWaiter(60, page);
   
   if (!headlessResult) {
     yield* Effect.sync(() => addon.notify({
@@ -367,7 +367,10 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
       catch: () => new Error('Failed to navigate to URL')
     });
     
-    const visibleResult = yield* contentWaiter(60, visiblePage);
+    const visibleResult = yield* pipe(contentWaiter(60, visiblePage), Effect.catchAll((err) => {
+      console.log('Error:', err);
+      return Effect.succeed(false);
+    }));
 
     if (!visibleResult) {
       // Immediately kill the browser window
