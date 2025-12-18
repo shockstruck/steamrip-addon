@@ -27,6 +27,7 @@ interface GofileContent {
 
 export default class GofileService extends DLService {
   private authToken: string | null = null;
+  private websiteToken: string | null = null;
 
   public constructor() {
     super('Gofile', 7);
@@ -43,8 +44,9 @@ export default class GofileService extends DLService {
       // Extract content ID from URL
       const contentId = yield* this.extractContentId(url);
       
-      // Get auth token
+      // Get auth token and website token
       yield* this.setAccountAccessToken();
+      yield* this.fetchWebsiteToken();
       
       // Build file structure and collect download links
       const files = yield* this.buildContentStructure(contentId, url);
@@ -102,6 +104,40 @@ export default class GofileService extends DLService {
     }.bind(this));
   }
 
+  private fetchWebsiteToken(): Effect.Effect<void, GofileScrapeError> {
+    return Effect.gen(function* (this: GofileService) {
+      if (this.websiteToken) {
+        return;
+      }
+
+      const response = yield* Effect.tryPromise({
+        try: () => fetch('https://gofile.io/dist/js/config.js', {
+          headers: {
+            'Accept': '*/*',
+            'User-Agent': 'Mozilla/5.0',
+          }
+        }),
+        catch: (error) => new GofileScrapeError({ url: 'https://gofile.io/dist/js/config.js', error })
+      });
+
+      const text = yield* Effect.tryPromise({
+        try: () => response.text(),
+        catch: (error) => new GofileScrapeError({ url: 'https://gofile.io/dist/js/config.js', error })
+      });
+
+      // Extract website token from: .wt = "TOKEN"
+      const match = text.match(/\.wt\s*=\s*["']([^"']+)["']/);
+      if (!match || !match[1]) {
+        return yield* Effect.fail(new GofileScrapeError({
+          url: 'https://gofile.io/dist/js/config.js',
+          error: new Error('Failed to extract website token from config.js')
+        }));
+      }
+
+      this.websiteToken = match[1];
+    }.bind(this));
+  }
+
   private buildContentStructure(
     contentId: string, 
     originalUrl: string, 
@@ -126,7 +162,7 @@ export default class GofileService extends DLService {
     password?: string
   ): Effect.Effect<void, GofilePasswordRequiredError | GofileScrapeError> {
     return Effect.gen(function* (this: GofileService) {
-      let apiUrl = `https://api.gofile.io/contents/${contentId}?wt=4fd6sg89d7s6&cache=true&sortField=createTime&sortDirection=1`;
+      let apiUrl = `https://api.gofile.io/contents/${contentId}`;
       
       if (password) {
         // Hash the password like in the Python version
@@ -138,7 +174,7 @@ export default class GofileService extends DLService {
         });
         const hashArray = Array.from(new Uint8Array(hashBuffer));
         const hashedPassword = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
-        apiUrl += `&password=${hashedPassword}`;
+        apiUrl += `?password=${hashedPassword}`;
       }
 
       const headers: Record<string, string> = {
@@ -151,6 +187,10 @@ export default class GofileService extends DLService {
       if (this.authToken) {
         headers['Cookie'] = `accountToken=${this.authToken}`;
         headers['Authorization'] = `Bearer ${this.authToken}`;
+      }
+
+      if (this.websiteToken) {
+        headers['X-Website-Token'] = this.websiteToken;
       }
 
       const response = yield* Effect.tryPromise({
