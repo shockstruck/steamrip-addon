@@ -824,7 +824,7 @@ const program = Effect.gen(function* () {
         launchExecutable: input.executable as string,
         version: latestVersion,
         redistributables: commonRedistExecutables,
-        launchArguments: process.platform === 'linux' ? ((winedlls.length > 0 ? 'WINEDLLOVERRIDES="' + winedlls.join(',') + '=n,b"' : '') + ' %command%').trim() : ''
+        launchArguments: process.platform === 'linux' ? ((winedlls.length > 0 ? 'WINEDLLOVERRIDES="' + winedlls.join(',') + '=n,b"' : '') + ' %command%').trim() : '%command%'
       };
 
       console.log("Response", response);
