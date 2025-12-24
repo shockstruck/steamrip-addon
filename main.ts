@@ -535,7 +535,7 @@ const program = Effect.gen(function* () {
     );
   });
 
-  addon.on('setup', ({ path, multiPartFiles }, event) => {
+  addon.on('setup', ({ path, multiPartFiles, appID }, event) => {
     event.log(`Setup: path: ${path}, multiPartFiles: ${multiPartFiles}`);
     event.defer();
     const setupEffect = Effect.fn('setupEffect')(function*() {
@@ -814,12 +814,17 @@ const program = Effect.gen(function* () {
         }
       }
 
+      let appDetails = yield* Effect.tryPromise(async () => await addon.getAppDetails(appID, 'steam'))
+        .pipe(Effect.catchAll(_ => Effect.succeed(undefined)));
+
+      let latestVersion = (appDetails?.latestVersion ?? '1.0').trim();
+
       const response: Parameters<typeof event.resolve>[0] = {
         cwd: input.cwd as string,
         launchExecutable: input.executable as string,
-        version: '1.0',
+        version: latestVersion,
         redistributables: commonRedistExecutables,
-        launchArguments: (process.platform === 'linux' && winedlls.length > 0 ? 'WINEDLLOVERRIDES="' + winedlls.join(',') + '=n,b"' : '') + ' %command%'
+        launchArguments: process.platform === 'linux' ? ((winedlls.length > 0 ? 'WINEDLLOVERRIDES="' + winedlls.join(',') + '=n,b"' : '') + ' %command%').trim() : ''
       };
 
       console.log("Response", response);
