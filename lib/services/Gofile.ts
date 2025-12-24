@@ -239,7 +239,8 @@ export default class GofileService extends DLService {
               url: child.link,
               headers: this.authToken ? {
                 'Cookie': `accountToken=${this.authToken}`,
-                'Authorization': `Bearer ${this.authToken}`
+                'Authorization': `Bearer ${this.authToken}`,
+                'OGI-Parallel-Limit': '1'
               } : {}
             });
           }

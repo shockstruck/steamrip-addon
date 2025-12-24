@@ -159,7 +159,10 @@ export default class BuzzheavierService extends DLService {
             {
               url: downloadUrl,
               name: 'BUZZHEAVIER',
-              headers,
+              headers: {
+                ...headers,
+                'OGI-Parallel-Limit': '1'
+              },
             },
           ];
         }.bind(this)),
