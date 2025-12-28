@@ -808,7 +808,7 @@ const program = Effect.gen(function* () {
 
       // if there's a "winmm.dll" in the executable path, we need to add it to winedlls
       let winedlls: string[] = [];
-      for (const dllToAdd of [ 'winmm', 'steam_api64', 'steam_api', 'OnlineFix64']) {
+      for (const dllToAdd of [ 'winmm', 'steam_api64', 'steam_api', 'OnlineFix64', 'steamclient64']) {
         if (existsSync(join(dirname(input.executable as string), dllToAdd + '.dll'))) {
           winedlls.push(dllToAdd.toLowerCase());
         }
