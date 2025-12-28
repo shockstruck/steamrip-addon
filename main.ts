@@ -793,9 +793,9 @@ const program = Effect.gen(function* () {
       }
 
       // if this is unity and we're on linux, remove all dependencies since it works out of the box (and i've been testing for like 10+ hours and it just won't work otherwise)
-      if (isUnity && process.platform === 'linux') {
-        commonRedistExecutables = [];
-      }
+      // if (isUnity && process.platform === 'linux') {
+      //   commonRedistExecutables = [];
+      // }
 
       // then remove the download path
       yield* Effect.tryPromise({
