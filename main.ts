@@ -793,9 +793,9 @@ const program = Effect.gen(function* () {
       }
 
       // if this is unity and we're on linux, remove all dependencies since it works out of the box (and i've been testing for like 10+ hours and it just won't work otherwise)
-      if (isUnity && process.platform === 'linux') {
-        commonRedistExecutables = [];
-      }
+      // if (isUnity && process.platform === 'linux') {
+      //   commonRedistExecutables = [];
+      // }
 
       // then remove the download path
       yield* Effect.tryPromise({
@@ -808,8 +808,8 @@ const program = Effect.gen(function* () {
 
       // if there's a "winmm.dll" in the executable path, we need to add it to winedlls
       let winedlls: string[] = [];
-      for (const dllToAdd of [ 'winmm', 'steam_api64', 'steam_api', 'OnlineFix64']) {
-        if (existsSync(join(dirname(input.executable as string), dllToAdd + '.dll'))) {
+      for (const dllToAdd of [ 'winmm', 'steam_api64', 'steam_api', 'OnlineFix64', 'steamclient64', 'OnlineFix']) {
+        if (existsSync(join(dirname(input.executable as string), dllToAdd + '.dll')) || existsSync(join(dirname(input.executable as string), dllToAdd.toLowerCase() + '.dll'))) {
           winedlls.push(dllToAdd.toLowerCase());
         }
       }
