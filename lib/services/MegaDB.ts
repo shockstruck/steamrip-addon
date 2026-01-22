@@ -35,7 +35,10 @@ export default class MegaDBService extends DLService {
         });
         return { browser, page } as { browser: Browser; page: Page };
       },
-      catch: (error) => new MegaDBError({ url, error }),
+      catch: (error) => {
+        console.error('Error acquiring connection', error);
+        return new MegaDBError({ url, error });
+      }
     });
 
     return Effect.acquireUseRelease( 
