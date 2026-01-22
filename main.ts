@@ -474,7 +474,10 @@ const program = Effect.gen(function* () {
 
             const downloadUrls = yield* pipe(
               service.scrapeDownloadLinks(currentUrl, event),
-              Effect.catchAll(e => Effect.succeed([]))
+              Effect.catchAll(e => { 
+                console.error('Error', e);
+                return Effect.succeed([]);
+              })
             ); 
             console.log('download found', downloadUrls);
             // test the download links to see if we can get a 200 response
