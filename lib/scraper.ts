@@ -188,6 +188,10 @@ export default class Scraper {
     }.bind(this));
   }
 
+  getHeaderObject(): Record<string, string> {
+    return headerManager.getHeaderObject();
+  }
+
   scrapeAllLinks(): Effect.Effect<{ name: string | undefined; url: string; }[], NetworkError | FileSystemError> {
     return Effect.gen(function*() {
       // Load headers if available

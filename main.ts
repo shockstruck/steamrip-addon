@@ -1,3 +1,4 @@
+import { JSDOM } from 'jsdom';
 import OGIAddon, { ConfigurationBuilder, EventResponse, SearchTool, type SearchResult } from "ogi-addon";
 import Scraper from "./lib/scraper";
 import { getService, getServiceNameFromUrl } from "./lib/services/matcher";
@@ -273,11 +274,14 @@ const program = Effect.gen(function* () {
     });
   });
 
-  addon.on('search', ({ storefront, appID, for: forType }, event) => {
+  addon.on('search', (info, event) => {
+    const { for: forType } = info;
     if (forType === 'task') {
       event.resolve([]);
       return;
     }
+
+    const { storefront, appID } = info;
     event.defer();
     
     const searchEffect = Effect.fn('searchEffect')(function* () {
@@ -312,6 +316,26 @@ const program = Effect.gen(function* () {
       }
       
       console.log("Found game", game.name);
+
+      // if this is an update, we need to check if the game has already been downloaded
+      if (forType === 'update') {
+        const { cwd } = info.libraryInfo;
+        const steamripInfo = yield* Effect.tryPromise(
+          async () => await fs.readFile(join(cwd as string, 'steamrip-info.json'), 'utf8'),
+        ).pipe(Effect.catchAll(() => Effect.succeed(undefined)));
+        if (steamripInfo) {
+          const { title } = JSON.parse(steamripInfo);
+          if (title === game.name) {
+            console.log("Game already downloaded.", game.name);
+            return [
+              {
+                name: 'You have the latest version Steamrip has for this game.',
+                downloadType: 'empty',
+              } as SearchResult
+            ];
+          }
+        }
+      }
       const resolutions = [{
         name: game.name,
         downloadType: 'request',
@@ -512,7 +536,8 @@ const program = Effect.gen(function* () {
       return {
         downloadType: 'direct',
         name: info.name,
-        files: [{ name: downloadDetails.name, downloadURL: downloadDetails.url, headers: downloadDetails.headers }]
+        files: [{ name: downloadDetails.name, downloadURL: downloadDetails.url, headers: downloadDetails.headers }],
+        manifest: info.manifest
       } as SearchResult;
     });
 
@@ -535,7 +560,11 @@ const program = Effect.gen(function* () {
     );
   });
 
-  addon.on('setup', ({ path, multiPartFiles, appID }, event) => {
+  addon.on('setup', ({ path, type, multiPartFiles, appID, manifest }, event) => {
+    if (type === 'empty') {
+      event.fail('Game already downloaded.');
+      return;
+    }
     event.log(`Setup: path: ${path}, multiPartFiles: ${multiPartFiles}`);
     event.defer();
     const setupEffect = Effect.fn('setupEffect')(function*() {
@@ -660,13 +689,31 @@ const program = Effect.gen(function* () {
           return undefined;
         }),
       );
+      
+      if (autoFoundGameFolder) {
+        // move all the contents in that folder into the path
+        yield* Effect.tryPromise({
+          try: async () => {
+            const contents = await fs.readdir(join(path, autoFoundGameFolder as string));
+            for (const content of contents) {
+              await fs.rename(join(path, autoFoundGameFolder as string, content), join(path, content));
+            }
+            await fs.rmdir(join(path, autoFoundGameFolder as string), { recursive: true });
+            return undefined;
+          },
+          catch: () => {
+            console.log('Failed to move folder', join(path, autoFoundGameFolder as string));
+            return Effect.succeed(undefined);
+          }
+        });
+      }
 
       let executables: string[] = [];
       if (autoFoundGameFolder) {
         console.log("Auto found game folder", autoFoundGameFolder, 'Searching for executables...');
         executables = yield* pipe(
           Effect.tryPromise({
-            try: async () => await fs.readdir(join(path, autoFoundGameFolder as string)),
+            try: async () => await fs.readdir(path),
             catch: () => []
           }),
           Effect.map(executables => executables.filter(executable => executable.endsWith('.exe'))),
@@ -674,7 +721,7 @@ const program = Effect.gen(function* () {
           Effect.map(executables => executables.filter(executable => !executable.toLowerCase().includes('unitycrashhandler'))),
           // remove uninstall00.exe
           Effect.map(executables => executables.filter(executable => !executable.toLowerCase().includes('unins000.exe'))),
-          Effect.map(executables => executables.map(executable => join(path, autoFoundGameFolder as string, executable)))
+          Effect.map(executables => executables.map(executable => join(path, executable)))
         );
         console.log("Found executables", executables);
         if (executables.length === 0) {
@@ -775,7 +822,7 @@ const program = Effect.gen(function* () {
         }
       }
       if (autoFoundGameFolder) {
-        input.cwd = join(path, autoFoundGameFolder);
+        input.cwd = path;
       }
 
       if (executables.length >= 0 && executables.length !== 1 && !String(input.executable).startsWith(path)) {
@@ -808,7 +855,7 @@ const program = Effect.gen(function* () {
 
       // if there's a "winmm.dll" in the executable path, we need to add it to winedlls
       let winedlls: string[] = [];
-      for (const dllToAdd of [ 'winmm', 'steam_api64', 'steam_api', 'OnlineFix64', 'steamclient64', 'OnlineFix']) {
+      for (const dllToAdd of [ 'winmm', 'steam_api64', 'steam_api', 'OnlineFix64', 'steamclient64', 'OnlineFix', 'version']) {
         if (existsSync(join(dirname(input.executable as string), dllToAdd + '.dll')) || existsSync(join(dirname(input.executable as string), dllToAdd.toLowerCase() + '.dll'))) {
           winedlls.push(dllToAdd.toLowerCase());
         }
@@ -818,6 +865,28 @@ const program = Effect.gen(function* () {
         .pipe(Effect.catchAll(_ => Effect.succeed(undefined)));
 
       let latestVersion = (appDetails?.latestVersion ?? '1.0').trim();
+
+      // write to the game install cwd a "steamrip-info.json"
+
+      const { title }: { title: string | undefined } = yield* (manifest ? pipe(
+        Effect.tryPromise(async () => await axios.get(manifest.url as string, { headers: scraper.getHeaderObject()})),
+        Effect.andThen(response => new JSDOM(response.data)),
+        Effect.andThen(dom => ({ title: dom.window.document.querySelector('.post-title')?.textContent?.trim() })),
+        Effect.catchAll(error => {
+          console.error('Failed to get app details', manifest?.url, error);
+          return Effect.succeed({ title: undefined });
+        })
+      ) : Effect.succeed({ title: undefined }));
+
+      yield* Effect.tryPromise({
+        try: async () => await fs.writeFile(join(input.cwd as string, 'steamrip-info.json'), JSON.stringify({
+          title: title ?? 'unknown',
+        }, null, 2)),
+        catch: () => {
+          console.log('Failed to write steamrip-info.json', join(input.cwd as string, 'steamrip-info.json'));
+          return Effect.succeed(undefined);
+        }
+      });
 
       const response: Parameters<typeof event.resolve>[0] = {
         cwd: input.cwd as string,
