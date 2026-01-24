@@ -153,7 +153,20 @@ const program = Effect.gen(function* () {
       .setDescription('Disallow services that require a captcha to be solved.')
       .setDefaultValue(false)
     )
+    .addActionOption(option => 
+      option
+        .setName('clearCloudflareCookies')
+        .setDisplayName('Clear Cloudflare Cookies')
+        .setDescription('Clear the Cloudflare cookies from the browser.')
+        .setButtonText('Clear')
+    )
   )
+
+  addon.onTask('clearCloudflareCookies', (task) => Effect.gen(function*() {
+    yield* headerManager.clearHeaders();
+    yield* Effect.sync(() => task.log('Cloudflare cookies cleared.'));
+    yield* Effect.sync(() => task.complete());
+  }).pipe(Effect.runPromise));
 
   addon.on('connect', (event) => {
     const connectEffect = Effect.fn('connectEffect')(function*() {
@@ -399,14 +412,14 @@ const program = Effect.gen(function* () {
           if (addon.config.getBooleanValue('manualSelect') ?? false) {
             return Effect.promise(async () => {
               const options = links.map(link => link.service);
-              const config = new ConfigurationBuilder();
-              config.addStringOption(option =>
-                option
-                  .setName('service')
-                  .setDisplayName('Service')
-                  .setDescription('Please select the service you want to use for downloading this game.')
-                  .setAllowedValues(options)
-              );
+              const config = new ConfigurationBuilder()
+                .addStringOption(option =>
+                  option
+                    .setName('service')
+                    .setDisplayName('Service')
+                    .setDescription('Please select the service you want to use for downloading this game.')
+                    .setAllowedValues(options)
+                );
               const input = await event.askForInput(
                 'Manual Service Selection',
                 'Please select the service you want to use for downloading this game.',
@@ -563,7 +576,7 @@ const program = Effect.gen(function* () {
     );
   });
 
-  addon.on('setup', ({ path, type, multiPartFiles, appID, manifest }, event) => {
+  addon.on('setup', ({ path, type, multiPartFiles, appID, manifest, for: forType }, event) => {
     if (type === 'empty') {
       event.fail('Game already downloaded.');
       return;
@@ -736,11 +749,11 @@ const program = Effect.gen(function* () {
       let isUnity = false;
 
       // now it's time to build the ui for the setup
-      const inputAsk = new ConfigurationBuilder()
+      let inputAsk = new ConfigurationBuilder()
       let addedInput = false;
-      if (hasCommonRedist) {
+      if (hasCommonRedist && forType !== 'update') {
         addedInput = true;
-        inputAsk.addBooleanOption(option => 
+        inputAsk = inputAsk.addBooleanOption(option => 
           option.setName('runCommonRedist')
             .setDisplayName('Run Common Redistributables')
             .setDescription('Run the Common Redistributables (Useful if you are downloading a game from Steamrip for the first time, or if you don\'t know if you need it).')
@@ -749,7 +762,7 @@ const program = Effect.gen(function* () {
       }
       if (!autoFoundGameFolder) {
         addedInput = true;
-        inputAsk.addStringOption(option => 
+        inputAsk = inputAsk.addStringOption(option => 
           option.setName('cwd')
             .setDisplayName('Game Folder')
             .setDescription('Game folder to run the game from. This is the folder that contains the game executable.')
@@ -760,7 +773,7 @@ const program = Effect.gen(function* () {
       if (executables.length >= 0 && executables.length !== 1) {
         addedInput = true;
         if (executables.length > 1) {
-          inputAsk.addStringOption(option => 
+          inputAsk = inputAsk.addStringOption(option => 
             option.setName('executable')
               .setDisplayName('Executable Path')
               .setDescription('Executable path to run the game (ends in .exe). This will be inside of the game folder.')
@@ -770,7 +783,7 @@ const program = Effect.gen(function* () {
           );
         }
         else {
-          inputAsk.addStringOption(option => 
+          inputAsk = inputAsk.addStringOption(option => 
             option.setName('executable')
               .setDisplayName('Executable Path')
               .setDescription('Executable path to run the game (ends in .exe). This will be inside of the game folder.')
