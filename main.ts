@@ -158,6 +158,7 @@ const program = Effect.gen(function* () {
         .setName('clearCloudflareCookies')
         .setDisplayName('Clear Cloudflare Cookies')
         .setDescription('Clear the Cloudflare cookies from the browser.')
+        .setTaskName('clearCloudflareCookies')
         .setButtonText('Clear')
     )
   )
