@@ -194,7 +194,7 @@ const program = Effect.gen(function* () {
       }));
       if (!chromeInstalled) {
         yield* Effect.sync(() => task.log('Chrome/Chromium is not installed on the device. Please install it and try again.'));
-        yield* Effect.sync(() => task.finish());
+        yield* Effect.sync(() => task.complete());
         yield* Effect.sync(() => addon.notify({
           message: 'Steamrip requires Chrome/Chromium to be installed on the device for accessing Steamrip.com',
           id: 'str-chrome-not-installed',
@@ -246,7 +246,7 @@ const program = Effect.gen(function* () {
 
       if (cloudflareResult === undefined) {
         yield* Effect.sync(() => task.log('Seems like we cannot access steamrip.com. Please check your internet connection and try again.'));
-        yield* Effect.sync(() => task.finish());
+        yield* Effect.sync(() => task.complete());
         addon.notify({
           message: 'Seems like we cannot access steamrip.com. Please check your internet connection and try again.',
           id: 'steamrip-cloudflare-error',
@@ -272,7 +272,7 @@ const program = Effect.gen(function* () {
         id: 'steamrip-cloudflare-solved',
         type: 'success',
       }));
-      yield* Effect.sync(() => task.finish());
+      yield* Effect.sync(() => task.complete());
     });
 
     Effect.runPromise(connectEffect()).catch(error => {
