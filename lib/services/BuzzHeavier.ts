@@ -90,6 +90,7 @@ export default class BuzzheavierService extends DLService {
             for (let attempt = 0; attempt < 5; attempt++) {
               // Always re-find the download button in case the DOM changed
               downloadButton = yield* findDownloadButton();
+              console.log('download button found:', downloadButton ? 'yes' : 'no');
 
               if (!downloadButton) {
                 lastError = "No download button found";
@@ -104,6 +105,8 @@ export default class BuzzheavierService extends DLService {
                 });
                 continue;
               }
+
+              console.log('clicking download button...');
 
               // press it once to activate the download (then an ad pops up)
               yield* Effect.tryPromise({
@@ -168,6 +171,7 @@ export default class BuzzheavierService extends DLService {
                 try: () => page.waitForSelector(".link-button.gay-button"),
                 catch: (error) => new BuzzHeavierError({ url, error }),
               });
+              console.log('next attempt...')
               continue;
             }
             if (!downloadUrl) {
