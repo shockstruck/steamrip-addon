@@ -191,6 +191,8 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
     return false;
   });
 
+  // Set protocol timeout via environment variable to avoid Runtime.callFunctionOn timeout
+  process.env.PUPPETEER_PROTOCOL_TIMEOUT = String(PUPPETEER_OPTIONS.protocolTimeout || 180000);
   const headlessConn = yield* Effect.tryPromise(() => connect({ headless: true, disableXvfb: true, args: PUPPETEER_OPTIONS.args })).pipe(Effect.catchAll((err) => {
     console.log('Failed to launch headless browser, will try visible browser:', err);
     return Effect.succeed(undefined);

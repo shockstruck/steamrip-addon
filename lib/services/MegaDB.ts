@@ -106,14 +106,17 @@ export default class MegaDBService extends DLService {
 
                 cdp.on('Browser.downloadWillBegin', (event: unknown) => {
                   if (!isDownloadEvent(event)) return;
-                  console.log(`[MegaDB] Download detected: ${event.url}`);
+                  console.log(`[MegaDB] Download detected: ${event.url}, guid: ${event.guid}`);
                   cdp.send('Browser.cancelDownload', { guid: event.guid })
                     .then(() => {
-                      console.log(`[MegaDB] Download cancelled, captured URL: ${event.url}`);
+                      console.log(`[MegaDB] Download cancelled successfully: ${event.guid}`);
                       resume(Effect.succeed(event.url));
                     })
                     .catch((error: unknown) => {
-                      resume(Effect.fail(new DownloadCatcherError({ error })));
+                      console.error(`[MegaDB] Failed to cancel download:`, error);
+                      // Even if cancel fails, we still got the URL, so succeed with the URL
+                      // The file will download to /tmp but we have what we need
+                      resume(Effect.succeed(event.url));
                     });
                 });
 
