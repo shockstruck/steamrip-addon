@@ -188,6 +188,8 @@ const program = Effect.gen(function* () {
         console.log('CHROME_PATH set to', process.env.CHROME_PATH);
       }
       // check if chrome is installed on the device, and we can spawn a puppeteer-real-browser process
+      // Set protocol timeout via environment variable to avoid Runtime.callFunctionOn timeout
+      process.env.PUPPETEER_PROTOCOL_TIMEOUT = String(PUPPETEER_OPTIONS.protocolTimeout || 180000);
       const chromeInstalled = yield* Effect.tryPromise(() => connect({ headless: true, disableXvfb: true, args: PUPPETEER_OPTIONS.args })).pipe(Effect.catchAll((err) => {
         console.log('Error:', err);
         return Effect.succeed(undefined);
@@ -910,7 +912,19 @@ const program = Effect.gen(function* () {
         launchExecutable: input.executable as string,
         version: latestVersion,
         redistributables: commonRedistExecutables,
-        launchArguments: process.platform === 'linux' ? ((winedlls.length > 0 ? 'WINEDLLOVERRIDES="' + winedlls.join(',') + '=n,b"' : '') + ' %command%').trim() : '%command%'
+        launchArguments: process.platform === 'linux' ? ((winedlls.length > 0 ? 'WINEDLLOVERRIDES="' + winedlls.join(',') + '=n,b"' : '') + ' %command%').trim() : '%command%',
+        umu: {
+          umuId: `steam:${appID}`,
+          dllOverrides: [
+            'winmm=n,b',
+            'steam_api64=n,b',
+            'steam_api=n,b',
+            'OnlineFix64=n,b',
+            'steamclient64=n,b',
+            'OnlineFix=n,b',
+            'version=n,b',
+          ]
+        }
       };
 
       console.log("Response", response);
