@@ -56,13 +56,11 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
       headers: headerManager.getHeaderObject(),
       timeout: 10000,
     });
-    console.log('Response:', response);
     return response.status === 200 && !(response.data as string).includes('Cloudflare');
   }).pipe(Effect.catchAll((err) => {
     console.log('Error:', err);
     return Effect.succeed(false);
   }));
-  console.log('testResponse:', testResponse);
 
   if (testResponse) {
     headerManager.requiresCloudflare = false;
