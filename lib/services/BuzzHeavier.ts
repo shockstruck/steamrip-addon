@@ -23,7 +23,7 @@ export default class BuzzheavierService extends DLService {
     const acquireConn = Effect.tryPromise({
       try: async () => {
         const { browser, page } = await launchStandardBrowser({
-          headless: false,
+          headless: true,
           args: PUPPETEER_OPTIONS.args,
         });
         return { browser, page } as { browser: Browser; page: Page };
