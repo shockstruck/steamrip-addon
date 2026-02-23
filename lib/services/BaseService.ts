@@ -103,16 +103,18 @@ export class DLService {
         let resolved = false;
         try {
           const cdp: CdpSessionLike = await page.createCDPSession();
-          console.log("created cdp session");
-          console.log('clicking download button...')
-          await downloadButton.click({ delay: 1000, count: 2 });
-          console.log("clicked download button");
 
           await cdp.send("Browser.setDownloadBehavior", {
             behavior: "allow",
             downloadPath: "/tmp",
             eventsEnabled: true,
           });
+
+          console.log("created cdp session");
+          console.log('clicking download button...')
+          downloadButton.click({ delay: 1000 });
+          console.log("clicked download button");
+
 
           const isDownloadEvent = (
             e: unknown
