@@ -541,7 +541,7 @@ const program = Effect.gen(function* () {
           message: 'No download supported found for ' + info.name,
           type: 'error'
         })
-        yield* Effect.promise(async () => await event.askForInput('No download link supported', 'You are seeing this message because there isn\'t a service that we currently support to download this game. We are slowly working towards 100% coverage, so please be patient!', new ConfigurationBuilder()));
+        yield* Effect.promise(async () => await event.askForInput('No download link supported', 'You are seeing this message because there was an issue with downloading the game through one of the services. Please try again, and if you still can\'t download it, please report the issue to the thread.', new ConfigurationBuilder()));
         return yield* Effect.fail(lastError ?? new NoDownloadFoundError());
       });
     });
