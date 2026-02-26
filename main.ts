@@ -810,7 +810,7 @@ const program = Effect.gen(function* () {
         commonRedistExecutables.push(
           { name: 'dotnet48', path: 'winetricks' },
           { name: 'vcrun2019', path: 'winetricks' },
-          { name: 'vcrun2022', path: 'winetricks' },
+          { name: 'vcrun2015', path: 'winetricks' },
           { name: 'xna40', path: 'winetricks' }
         )
       }
