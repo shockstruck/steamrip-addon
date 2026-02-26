@@ -894,7 +894,8 @@ const program = Effect.gen(function* () {
         launchArguments: '%command%',
         umu: {
           umuId: `steam:${appID}`,
-          dllOverrides: winedlls.map(dll => dll + '=n,b')
+          dllOverrides: winedlls.map(dll => dll + '=n,b'),
+          protonVersion: 'UMU-Latest'
         }
       };
 
