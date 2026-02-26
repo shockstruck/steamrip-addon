@@ -754,7 +754,8 @@ const program = Effect.gen(function* () {
       // now it's time to build the ui for the setup
       let inputAsk = new ConfigurationBuilder()
       let addedInput = false;
-      if (hasCommonRedist && forType !== 'update') {
+      // On Linux, always run common redist without prompting
+      if (hasCommonRedist && forType !== 'update' && process.platform !== 'linux') {
         addedInput = true;
         inputAsk = inputAsk.addBooleanOption(option => 
           option.setName('runCommonRedist')
@@ -803,15 +804,14 @@ const program = Effect.gen(function* () {
         });
       }
 
-      // if the 'run common redist' is true, we need to run the common redistributables
+      // if the 'run common redist' is true (or on Linux, always run when available), we need to run the common redistributables
       let commonRedistExecutables: { name: string, path: string }[] = [];
-      if (input.runCommonRedist) {
+      if (input.runCommonRedist || (process.platform === 'linux')) {
         commonRedistExecutables.push(
           { name: 'dotnet48', path: 'winetricks' },
           { name: 'vcrun2019', path: 'winetricks' },
           { name: 'vcrun2022', path: 'winetricks' },
-          { name: 'xna40', path: 'winetricks' },
-          { name: 'dotnet-repair', path: 'microsoft' }
+          { name: 'xna40', path: 'winetricks' }
         )
       }
       if (autoFoundGameFolder) {
