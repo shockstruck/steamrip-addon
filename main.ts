@@ -806,39 +806,13 @@ const program = Effect.gen(function* () {
       // if the 'run common redist' is true, we need to run the common redistributables
       let commonRedistExecutables: { name: string, path: string }[] = [];
       if (input.runCommonRedist) {
-        const commonRedist = yield* Effect.tryPromise({
-          try: async () => await fs.readdir(join(path, '_CommonRedist')),
-          catch: () => Effect.fail(new NoFileFoundError())
-        });
-        if (commonRedist.length === 0) {
-          return yield* Effect.fail(new NoFileFoundError());
-        }
-        const redistributables = commonRedist.filter(file => file.endsWith('.exe') || file.endsWith('.msi'));
-        if (redistributables.length === 0) {
-          return yield* Effect.fail(new NoFileFoundError());
-        }
-        // join path to common redist
-        commonRedistExecutables = redistributables.map(file => ({ name: file, path: join(path, '_CommonRedist', file) }));
-        // order so that xna is last
-        commonRedistExecutables = commonRedistExecutables.sort((a, b) => {
-          if (a.name.toLowerCase().includes('xna')) return 1;
-          if (b.name.toLowerCase().includes('xna')) return -1;
-          return 0;
-        });
-        // append to the front microsoft c# runtime
-        if (process.platform === 'linux') {
-          // remove the dotNet from the commonRedistExecutables
-          commonRedistExecutables = commonRedistExecutables.filter(file => !file.name.toLowerCase().includes('dotnet'));
-
-          // append to the front dotnet
-          commonRedistExecutables = [ { name: 'dotnet48', path: 'winetricks' }, ...commonRedistExecutables ]
-          // apply dotnet20 to the back
-          // commonRedistExecutables = [ ...commonRedistExecutables, { name: 'dotnet20', path: 'winetricks' } ]
-          // add dotnet-repair to the end
-          commonRedistExecutables = [ ...commonRedistExecutables, { name: 'dotnet-repair', path: 'microsoft' } ]
-          // remove everyting that's dxwebsetup
-          commonRedistExecutables = commonRedistExecutables.filter(file => !file.name.toLowerCase().includes('dxwebsetup'));
-        }
+        commonRedistExecutables.push(
+          { name: 'dotnet48', path: 'winetricks' },
+          { name: 'vcrun2019', path: 'winetricks' },
+          { name: 'vcrun2022', path: 'winetricks' },
+          { name: 'xna40', path: 'winetricks' },
+          { name: 'dotnet-repair', path: 'microsoft' }
+        )
       }
       if (autoFoundGameFolder) {
         input.cwd = path;
@@ -872,13 +846,18 @@ const program = Effect.gen(function* () {
         }
       });
 
-      // if there's a "winmm.dll" in the executable path, we need to add it to winedlls
       let winedlls: string[] = [];
-      for (const dllToAdd of [ 'winmm', 'steam_api64', 'steam_api', 'OnlineFix64', 'steamclient64', 'OnlineFix', 'version']) {
-        if (existsSync(join(dirname(input.executable as string), dllToAdd + '.dll')) || existsSync(join(dirname(input.executable as string), dllToAdd.toLowerCase() + '.dll'))) {
-          winedlls.push(dllToAdd.toLowerCase());
-        }
-      }
+      // Get all dll files in the folder and use those
+      const dllFiles = (yield* Effect.tryPromise({
+        try: async () => await fs.readdir(input.cwd as string),
+        catch: () => []
+      })) as string[];
+
+      winedlls = dllFiles
+        .filter(file => file.toLowerCase().endsWith('.dll'))
+        .map(file => file.replace(/\.dll$/i, ''));
+
+      console.log("Found dlls", winedlls);
 
       let appDetails = yield* Effect.tryPromise(async () => await addon.getAppDetails(appID, 'steam'))
         .pipe(Effect.catchAll(_ => Effect.succeed(undefined)));
@@ -915,15 +894,7 @@ const program = Effect.gen(function* () {
         launchArguments: process.platform === 'linux' ? ((winedlls.length > 0 ? 'WINEDLLOVERRIDES="' + winedlls.join(',') + '=n,b"' : '') + ' %command%').trim() : '%command%',
         umu: {
           umuId: `steam:${appID}`,
-          dllOverrides: [
-            'winmm=n,b',
-            'steam_api64=n,b',
-            'steam_api=n,b',
-            'OnlineFix64=n,b',
-            'steamclient64=n,b',
-            'OnlineFix=n,b',
-            'version=n,b',
-          ]
+          dllOverrides: winedlls.map(dll => dll + '=n,b')
         }
       };
 
