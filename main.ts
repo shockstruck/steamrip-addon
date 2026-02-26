@@ -1,5 +1,5 @@
 import { JSDOM } from 'jsdom';
-import OGIAddon, { ConfigurationBuilder, EventResponse, SearchTool, type SearchResult } from "ogi-addon";
+import OGIAddon, { ConfigurationBuilder, EventResponse, SearchTool, type SetupEventResponse, type SearchResult } from "ogi-addon";
 import Scraper from "./lib/scraper";
 import { getService, getServiceNameFromUrl } from "./lib/services/matcher";
 import FileCryptService from "./lib/services/FileCrypt";
@@ -680,6 +680,13 @@ const program = Effect.gen(function* () {
         }
       }
 
+      // Get Steam App Details
+      let appDetails = yield* Effect.tryPromise(async () => await addon.getAppDetails(appID, 'steam'))
+        .pipe(Effect.catchAll(_ => Effect.succeed(undefined)));
+
+      // Get Latest Version
+      let latestVersion = (appDetails?.latestVersion ?? '1.0').trim();
+
       // now, if there is a _CommonRedist folder, we need to put a boolean
       const hasCommonRedist = yield* Effect.tryPromise({
         try: async () => (await fs.stat(join(path, '_CommonRedist'))).isDirectory(),
@@ -749,7 +756,38 @@ const program = Effect.gen(function* () {
         }
       }
 
-      let isUnity = false;
+
+      // Lossless Scaling Has Some Unique Properties
+      if (appID === 993090 && process.platform === 'linux') {
+        // check if the executable is "LosslessScaling.exe"
+        if (executables.some(executable => executable.toLowerCase().includes('losslessscaling.exe'))) {
+          // move the entire directory of the cwd to path /home/{user}/.steam/steamapps/common/Lossless Scaling
+          let newPath = join('/home/', process.env.USER as string, '.steam/steamapps/common/Lossless Scaling');
+          yield* Effect.tryPromise({
+            try: async () => await fs.rename(path, newPath),
+            catch: () => {
+              console.error('Error moving directory', newPath);
+              return Effect.succeed(undefined);
+            }
+          })
+            
+          path = newPath;
+          executables = executables.map(executable => executable.replace(path, newPath));
+          // then just resolve everything and return
+          return yield* Effect.succeed({
+            cwd: newPath,
+            launchExecutable: executables[0],
+            version: latestVersion,
+            redistributables: [],
+            launchArguments: '%command%',
+            umu: {
+              umuId: `steam:${appID}`,
+              dllOverrides: [],
+              protonVersion: 'UMU-Latest'
+            }
+          } as SetupEventResponse);
+        }
+      }
 
       // now it's time to build the ui for the setup
       let inputAsk = new ConfigurationBuilder()
@@ -827,11 +865,6 @@ const program = Effect.gen(function* () {
         input.executable = executables[0];
       }
 
-      // check the path of the executable and see if there's a "UnityPlayer.dll" in the path
-      if (existsSync(join(dirname(input.executable as string), 'UnityPlayer.dll'))) {
-        isUnity = true;
-      }
-
       // if this is unity and we're on linux, remove all dependencies since it works out of the box (and i've been testing for like 10+ hours and it just won't work otherwise)
       // if (isUnity && process.platform === 'linux') {
       //   commonRedistExecutables = [];
@@ -857,12 +890,10 @@ const program = Effect.gen(function* () {
         .filter(file => file.toLowerCase().endsWith('.dll'))
         .map(file => file.replace(/\.dll$/i, ''));
 
+
+
       console.log("Found dlls", winedlls);
 
-      let appDetails = yield* Effect.tryPromise(async () => await addon.getAppDetails(appID, 'steam'))
-        .pipe(Effect.catchAll(_ => Effect.succeed(undefined)));
-
-      let latestVersion = (appDetails?.latestVersion ?? '1.0').trim();
 
       // write to the game install cwd a "steamrip-info.json"
 
