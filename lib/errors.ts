@@ -31,7 +31,8 @@ export class DownloadCatcherError extends Data.TaggedError('DownloadCatcherError
 }> {}
 
 export class UnknownServiceError extends Data.TaggedError('UnknownServiceError')<{
-  name: string;
+  url: string;
+  error: unknown;
 }> {}
 
 export class FileCryptError extends Data.TaggedError('FileCryptError')<{

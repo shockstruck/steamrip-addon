@@ -1,14 +1,13 @@
-import type { DLService } from "./BaseService";
 import { isFilecryptUrl } from "../filecrypt";
-import { getLinks } from "../../tests/scraper.test";
 import BuzzheavierService from "./BuzzHeavier";
 import FichierService from "./1Fichier";
 import FileCryptService from "./FileCrypt";
 import GofileService from "./Gofile";
 import { Effect } from "effect";
-import { InvalidUrlError, NoServiceFoundError, UnknownServiceError } from "../errors";
+import { InvalidUrlError, NoServiceFoundError } from "../errors";
 import PixelDrainService from "./PixelDrain";
 import MegaDBService from "./MegaDB";
+import UnknownService from "./Unknown";
 
 export const getService = (name: string) => Effect.gen(function*() {
   switch (name) {
@@ -24,8 +23,10 @@ export const getService = (name: string) => Effect.gen(function*() {
       return yield* Effect.succeed(new PixelDrainService());
     case 'MegaDB':
       return yield* Effect.succeed(new MegaDBService());
+    case 'Unknown':
+      return yield* Effect.succeed(new UnknownService());
     default:
-      return yield* Effect.fail(new UnknownServiceError({ name }));
+      return yield* Effect.succeed(new UnknownService());
   }
 });
 
@@ -101,7 +102,7 @@ export function getServiceNameFromUrl(url: string): string | null {
       return 'MegaDB';
     }
     
-    return null;
+    return 'Unknown';
   } catch {
     return null;
   }

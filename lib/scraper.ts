@@ -55,6 +55,24 @@ export default class Scraper {
     }.bind(this));
   }
 
+  public cleanupAllScrapes(): Effect.Effect<void, FileSystemError> {
+    return Effect.tryPromise({
+      try: async () => {
+        if (!await fs.access(this.scrapesDir).then(() => true).catch(() => false)) {
+          return;
+        }
+        const files = await fs.readdir(this.scrapesDir);
+        for (const file of files) {
+          if (file.endsWith('.json')) {
+            await fs.unlink(join(this.scrapesDir, file));
+            console.log(`Cleaned up scrape: ${file}`);
+          }
+        }
+      },
+      catch: (error) => new FileSystemError({ path: this.scrapesDir, error })
+    });
+  }
+
   public getScrapeStats(): Effect.Effect<{ total: number; expired: number; valid: number }, FileSystemError> {
     return Effect.tryPromise({
       try: async () => {

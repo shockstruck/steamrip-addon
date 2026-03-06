@@ -161,11 +161,23 @@ const program = Effect.gen(function* () {
         .setTaskName('clearCloudflareCookies')
         .setButtonText('Clear')
     )
+    .addActionOption(option => option
+      .setName('clearDownloadCache')
+      .setDisplayName('Clear Steamrip Cache')
+      .setDescription('Clear the Steamrip cache from the device.')
+      .setTaskName('clearDownloadCache')
+      .setButtonText('Clear')
+    )
   )
 
   addon.onTask('clearCloudflareCookies', (task) => Effect.gen(function*() {
     yield* headerManager.clearHeaders();
     yield* Effect.sync(() => task.log('Cloudflare cookies cleared.'));
+    yield* Effect.sync(() => task.complete());
+  }).pipe(Effect.runPromise));
+  addon.onTask('clearDownloadCache', (task) => Effect.gen(function*() {
+    yield* scraper.cleanupAllScrapes();
+    yield* Effect.sync(() => task.log('Steamrip cache cleared.'));
     yield* Effect.sync(() => task.complete());
   }).pipe(Effect.runPromise));
 
