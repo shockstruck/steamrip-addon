@@ -34,7 +34,8 @@ export default class UnknownService extends DLService {
         console.log('Acquiring connection to', new URL(url).hostname);
         const { browser, page } = await connect({ 
           headless: false, // Non-headless like FileCrypt for user interaction
-          args: PUPPETEER_OPTIONS.args ,
+          args: PUPPETEER_OPTIONS.args,
+          disableXvfb: true,
           plugins: [
             new PuppeteerExtraPluginAdblocker({
               blockTrackers: true,
