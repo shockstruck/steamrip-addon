@@ -12,17 +12,18 @@ import { join } from 'path';
 
 export const SCRAPE_PRIORITY = {
   // if scrape priority is 0, we will not choose it, as its quite literally impossible to get it effectively
-  'GOFILE': 0,
+  'GOFILE': 6,
   'Buzzheavier': 10,
   'DataNodes': 0,
-  'MegaDB': 0,
+  'MegaDB': 2,
   '1FICHIER': 9,
   'PixelDrain': 10,
+  'Unknown': 1,
   'FILECRYPT': 8 // High priority since it's a link redirector that leads to actual download links
 }
 
-// 24 hours in milliseconds
-const SCRAPE_EXPIRY_MS = 24 * 60 * 60 * 1000;
+// 8 hours in milliseconds
+const SCRAPE_EXPIRY_MS = 8 * 60 * 60 * 1000;
 
 export default class Scraper {
   public catalog: { games: { name: string, url: string }[], lastUpdated: number } = { games: [], lastUpdated: 0 };
