@@ -7,6 +7,13 @@ import { ConfigurationBuilder } from "ogi-addon";
 import { connect } from "puppeteer-real-browser";
 import { PuppeteerExtraPluginAdblocker } from "puppeteer-extra-plugin-adblocker";
 
+function isTargetCloseError(error: unknown): boolean {
+  if (error instanceof Error) {
+    return error.name === "TargetCloseError" || /target\s*closed/i.test(error.message);
+  }
+  return false;
+}
+
 export default class UnknownService extends DLService {
   public constructor() {
     super('Unknown', 1); // Low priority since it's a fallback
@@ -60,7 +67,13 @@ export default class UnknownService extends DLService {
           console.log('Navigating to', url);
           yield* Effect.tryPromise({
             try: () => page.goto(url, { waitUntil: 'domcontentloaded' }),
-            catch: (error) => new UnknownServiceError({ url, error }),
+            catch: (error) =>
+              new UnknownServiceError({
+                url,
+                error: isTargetCloseError(error)
+                  ? "Browser window was closed before the page finished loading"
+                  : error,
+              }),
           });
           // Notify user about captcha/interaction requirement
 
@@ -102,7 +115,15 @@ export default class UnknownService extends DLService {
                   resume(Effect.succeed(undefined));
                 }, 5 * 60 * 1000);
               } catch (error) {
-                resume(Effect.fail(new DownloadCatcherError({ error })));
+                resume(
+                  Effect.fail(
+                    new DownloadCatcherError({
+                      error: isTargetCloseError(error)
+                        ? "Browser window was closed"
+                        : error,
+                    })
+                  )
+                );
               }
             })();
           });
@@ -152,7 +173,11 @@ export default class UnknownService extends DLService {
               await client.detach();
               return foundHeaders;
             },
-            catch: (error) => new UnknownServiceError({ url, error }),
+            catch: (error) =>
+              new UnknownServiceError({
+                url,
+                error: isTargetCloseError(error) ? "Browser window was closed" : error,
+              }),
           });
 
           return [
@@ -163,7 +188,10 @@ export default class UnknownService extends DLService {
             },
           ];
         }.bind(this)),
-      ({ browser }) => Effect.promise(() => browser.close())
+      ({ browser }) =>
+        Effect.promise(() => browser.close()).pipe(
+          Effect.catchAll(() => Effect.void)
+        )
     );
   }
 }
