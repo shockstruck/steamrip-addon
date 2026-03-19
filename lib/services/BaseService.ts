@@ -32,10 +32,13 @@ export const PUPPETEER_OPTIONS: RealBrowserLaunchOptions = {
 export interface CdpSessionLike {
   send(method: string, params?: Record<string, unknown>): Promise<unknown>;
   on(event: string, listener: (params: unknown) => void): void;
+  off?(event: string, listener: (params: unknown) => void): void;
+  detach?(): Promise<void>;
 }
 
 export interface DownloadablePageLike {
-  createCDPSession(): Promise<CdpSessionLike>;
+  createCDPSession?: () => Promise<CdpSessionLike>;
+  target?: () => { createCDPSession: () => Promise<CdpSessionLike> };
 }
 
 export interface ClickableHandleLike {
@@ -102,7 +105,7 @@ export class DLService {
         let timeoutHandle: NodeJS.Timeout | null = null;
         let resolved = false;
         try {
-          const cdp: CdpSessionLike = await page.createCDPSession();
+          const cdp: CdpSessionLike = await createCdpSessionSafe(page);
 
           await cdp.send("Browser.setDownloadBehavior", {
             behavior: "allow",
@@ -174,4 +177,18 @@ export class DLService {
       })();
     });
   }
+}
+
+export async function createCdpSessionSafe(
+  pageLike: DownloadablePageLike
+): Promise<CdpSessionLike> {
+  if (typeof pageLike.createCDPSession === "function") {
+    return await pageLike.createCDPSession();
+  }
+  if (typeof pageLike.target === "function") {
+    return await pageLike.target().createCDPSession();
+  }
+  throw new Error(
+    "Cannot create CDP session: pageLike lacks createCDPSession() and target().createCDPSession()"
+  );
 }

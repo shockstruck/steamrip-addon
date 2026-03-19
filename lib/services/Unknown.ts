@@ -1,5 +1,5 @@
 
-import { DLService, PUPPETEER_OPTIONS, launchStandardBrowser } from "./BaseService";
+import { createCdpSessionSafe, DLService, PUPPETEER_OPTIONS, launchStandardBrowser } from "./BaseService";
 import { Effect } from "effect";
 import { DownloadCatcherError, UnknownServiceError } from "../errors";
 import type { EventResponse, SearchResult } from "ogi-addon";
@@ -12,6 +12,22 @@ function isTargetCloseError(error: unknown): boolean {
     return error.name === "TargetCloseError" || /target\s*closed/i.test(error.message);
   }
   return false;
+}
+
+async function closePopupPages(browser: any, mainPage: any): Promise<void> {
+  try {
+    const pages: any[] = (await browser.pages?.()) ?? [];
+    for (const p of pages) {
+      if (p && p !== mainPage) {
+        try {
+          await p.close?.();
+        } catch {}
+      }
+    }
+    await mainPage.bringToFront?.();
+  } catch {
+    // ignore (browser/page may be closing)
+  }
 }
 
 export default class UnknownService extends DLService {
@@ -65,6 +81,14 @@ export default class UnknownService extends DLService {
       ({ browser, page }) =>
         Effect.gen(function* (this: UnknownService) {
           console.log('Navigating to', url);
+
+          // Close ad/pop-up tabs automatically; keeps the main page stable.
+          const mainPage: any = page;
+          const popupHandler = async () => closePopupPages(browser as any, mainPage);
+          try {
+            (browser as any).on?.("targetcreated", popupHandler);
+          } catch {}
+
           yield* Effect.tryPromise({
             try: () => page.goto(url, { waitUntil: 'domcontentloaded' }),
             catch: (error) =>
@@ -75,6 +99,12 @@ export default class UnknownService extends DLService {
                   : error,
               }),
           });
+
+          // Give any immediate popups a moment to appear, then close them.
+          yield* Effect.sleep(1000);
+          yield* Effect.promise(() => closePopupPages(browser as any, mainPage)).pipe(
+            Effect.catchAll(() => Effect.void)
+          );
           // Notify user about captcha/interaction requirement
 
           let downloadUrl: string | undefined;
@@ -83,7 +113,7 @@ export default class UnknownService extends DLService {
           const downloadPromise = Effect.async<string | undefined, DownloadCatcherError>((resume) => {
             (async () => {
               try {
-                const cdp = await page.target().createCDPSession();
+                const cdp = await createCdpSessionSafe(page as any);
                 await cdp.send('Browser.setDownloadBehavior', {
                   behavior: 'allow',
                   downloadPath: '/tmp',
@@ -143,7 +173,7 @@ export default class UnknownService extends DLService {
           // Get headers from the download URL
           const headers: Record<string, string> = yield* Effect.tryPromise({
             try: async () => {
-              const client = await page.target().createCDPSession();
+              const client = await createCdpSessionSafe(page as any);
               await client.send('Network.enable');
               let foundHeaders: Record<string, string> = {};
 
@@ -169,8 +199,8 @@ export default class UnknownService extends DLService {
 
               // Wait for the event to fire
               await new Promise((resolve) => setTimeout(resolve, 2000));
-              client.off('Network.responseReceived', handler);
-              await client.detach();
+              client.off?.('Network.responseReceived', handler);
+              await client.detach?.();
               return foundHeaders;
             },
             catch: (error) =>
@@ -189,7 +219,12 @@ export default class UnknownService extends DLService {
           ];
         }.bind(this)),
       ({ browser }) =>
-        Effect.promise(() => browser.close()).pipe(
+        Effect.promise(async () => {
+          try {
+            (browser as any).removeAllListeners?.("targetcreated");
+          } catch {}
+          await browser.close();
+        }).pipe(
           Effect.catchAll(() => Effect.void)
         )
     );

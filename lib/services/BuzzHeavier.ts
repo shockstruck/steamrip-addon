@@ -1,4 +1,5 @@
 import {
+  createCdpSessionSafe,
   DLService,
   PUPPETEER_OPTIONS,
   launchStandardBrowser,
@@ -199,7 +200,7 @@ export default class BuzzheavierService extends DLService {
             // Get the headers from the page context using CDP
             const headers: Record<string, string> = yield* Effect.tryPromise({
               try: async () => {
-                const client = await mainPage.target().createCDPSession();
+                const client = await createCdpSessionSafe(mainPage as any);
                 await client.send("Network.enable");
                 let foundHeaders: Record<string, string> = {};
                 // Listen for responseReceived events
@@ -224,8 +225,8 @@ export default class BuzzheavierService extends DLService {
 
                 // Wait a short time for the event to fire
                 await new Promise((resolve) => setTimeout(resolve, 1000));
-                client.off("Network.responseReceived", handler);
-                await client.detach();
+                client.off?.("Network.responseReceived", handler);
+                await client.detach?.();
                 return foundHeaders;
               },
               catch: (error) => new BuzzHeavierError({ url, error }),

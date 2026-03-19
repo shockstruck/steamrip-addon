@@ -1,9 +1,25 @@
-import { DLService, PUPPETEER_OPTIONS, launchStandardBrowser } from "./BaseService";
+import { createCdpSessionSafe, DLService, PUPPETEER_OPTIONS, launchStandardBrowser } from "./BaseService";
 import { Effect } from "effect";
 import { MegaDBError, DownloadCatcherError } from "../errors";
 import type { EventResponse, SearchResult } from "ogi-addon";
 import { ConfigurationBuilder } from "ogi-addon";
 import type { Browser, Page } from "puppeteer";
+
+async function closePopupPages(browser: any, mainPage: any): Promise<void> {
+  try {
+    const pages: any[] = (await browser.pages?.()) ?? [];
+    for (const p of pages) {
+      if (p && p !== mainPage) {
+        try {
+          await p.close?.();
+        } catch {}
+      }
+    }
+    await mainPage.bringToFront?.();
+  } catch {
+    // ignore (browser/page may be closing)
+  }
+}
 
 export default class MegaDBService extends DLService {
   public constructor() {
@@ -48,6 +64,12 @@ export default class MegaDBService extends DLService {
           // Notify user about captcha/interaction requirement
           
           // Navigate to the URL
+          const mainPage: any = page;
+          const popupHandler = async () => closePopupPages(browser as any, mainPage);
+          try {
+            (browser as any).on?.("targetcreated", popupHandler);
+          } catch {}
+
           yield* Effect.tryPromise({
             try: () => page.goto(url, { waitUntil: 'domcontentloaded' }),
             catch: (error) => new MegaDBError({ url, error }),
@@ -58,6 +80,12 @@ export default class MegaDBService extends DLService {
             try: () => page.waitForNetworkIdle({ timeout: 10000 }),
             catch: (error) => new MegaDBError({ url, error }),
           });
+
+          // Close any popups that opened during load.
+          yield* Effect.sleep(1000);
+          yield* Effect.promise(() => closePopupPages(browser as any, mainPage)).pipe(
+            Effect.catchAll(() => Effect.void)
+          );
 
           let downloadUrl: string | undefined;
           let attempts = 0;
@@ -93,7 +121,7 @@ export default class MegaDBService extends DLService {
           const downloadPromise = Effect.async<string | undefined, DownloadCatcherError>((resume) => {
             (async () => {
               try {
-                const cdp = await page.target().createCDPSession();
+                const cdp = await createCdpSessionSafe(page as any);
                 await cdp.send('Browser.setDownloadBehavior', {
                   behavior: 'allow',
                   downloadPath: '/tmp',
@@ -145,7 +173,7 @@ export default class MegaDBService extends DLService {
           // Get headers from the download URL
           const headers: Record<string, string> = yield* Effect.tryPromise({
             try: async () => {
-              const client = await page.target().createCDPSession();
+              const client = await createCdpSessionSafe(page as any);
               await client.send('Network.enable');
               let foundHeaders: Record<string, string> = {};
 
@@ -171,8 +199,8 @@ export default class MegaDBService extends DLService {
 
               // Wait for the event to fire
               await new Promise((resolve) => setTimeout(resolve, 2000));
-              client.off('Network.responseReceived', handler);
-              await client.detach();
+              client.off?.('Network.responseReceived', handler);
+              await client.detach?.();
               return foundHeaders;
             },
             catch: (error) => new MegaDBError({ url, error }),
@@ -186,7 +214,13 @@ export default class MegaDBService extends DLService {
             },
           ];
         }.bind(this)),
-      ({ browser }) => Effect.promise(() => browser.close())
+      ({ browser }) =>
+        Effect.promise(async () => {
+          try {
+            (browser as any).removeAllListeners?.("targetcreated");
+          } catch {}
+          await browser.close();
+        })
     );
   }
 }
