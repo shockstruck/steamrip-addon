@@ -16,6 +16,7 @@ import { cloudflareSolve, CloudflareTestError } from "./lib/cloudflare";
 import { headerManager } from "./lib/header-manager";
 import { connect } from "puppeteer-real-browser";
 import { PUPPETEER_OPTIONS } from "./lib/services/BaseService";
+import { applySetupOverrides } from "./lib/app-overrides";
 
 const baseAddon = new OGIAddon({
   name: 'Steamrip Tool',
@@ -786,7 +787,7 @@ const program = Effect.gen(function* () {
           path = newPath;
           executables = executables.map(executable => executable.replace(path, newPath));
           // then just resolve everything and return
-          return yield* Effect.succeed({
+          const losslessResponse: SetupEventResponse = {
             cwd: newPath,
             launchExecutable: executables[0],
             version: latestVersion,
@@ -797,7 +798,16 @@ const program = Effect.gen(function* () {
               dllOverrides: [],
               protonVersion: 'UMU-Latest'
             }
-          } as SetupEventResponse);
+          };
+          return yield* Effect.succeed(
+            applySetupOverrides(appID, losslessResponse, {
+              appID,
+              platform: process.platform,
+              installPath: newPath,
+              executablePath: executables[0],
+              dllOverrides: [],
+            })
+          );
         }
       }
 
@@ -942,8 +952,15 @@ const program = Effect.gen(function* () {
         }
       };
 
-      console.log("Response", response);
-      return yield* Effect.succeed(response);
+      const finalResponse = applySetupOverrides(appID, response, {
+        appID,
+        platform: process.platform,
+        installPath: input.cwd as string,
+        executablePath: input.executable as string,
+        dllOverrides: winedlls.map(dll => dll + '=n,b'),
+      });
+      console.log("Response", finalResponse);
+      return yield* Effect.succeed(finalResponse);
     });
 
     pipe(
