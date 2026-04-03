@@ -68,8 +68,8 @@ export default class GofileService extends DLService {
   }
 
   /**
-   * Matches the reference implementation:
-   * sha256(f"{user_agent}::en-US::{account_token}::{time_slot}::f4s58gs6").hexdigest()
+   * Matches the reference implementation (see gofile-downloader generate_website_token):
+   * sha256(f"{user_agent}::en-US::{account_token}::{time_slot}::5d4f7g8sd45fsd").hexdigest()
    *
    * where time_slot = int(time()) // 14400.
    */
@@ -81,7 +81,7 @@ export default class GofileService extends DLService {
     return Effect.tryPromise({
       try: async () => {
         const timeSlot = Math.floor(Math.floor(Date.now() / 1000) / 14400);
-        const raw = `${userAgent}::en-US::${accountToken}::${timeSlot}::f4s58gs6`;
+        const raw = `${userAgent}::en-US::${accountToken}::${timeSlot}::5d4f7g8sd45fsd`;
 
         const encoder = new TextEncoder();
         const data = encoder.encode(raw);
