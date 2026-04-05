@@ -96,3 +96,5 @@ export class MegaDBError extends Data.TaggedError('MegaDBError')<{
   url: string;
   error: unknown;
 }> {}
+
+export class NotOnlineError extends Data.TaggedError('NotOnlineError')<{}> {}

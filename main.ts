@@ -5,7 +5,7 @@ import { getService, getServiceNameFromUrl } from "./lib/services/matcher";
 import FileCryptService from "./lib/services/FileCrypt";
 import { Context, Effect, Layer, Match, pipe } from "effect";
 import { BunRuntime } from "@effect/platform-bun";
-import { CommonRedistError, FileCryptError, InputError, NoDownloadFoundError, NoFileFoundError, NoGameFoundError, NoServiceFoundError, RarExtractionError, ScrapeGameDownloadsError, SteamSearchError } from "./lib/errors";
+import { CommonRedistError, FileCryptError, InputError, NoDownloadFoundError, NoFileFoundError, NoGameFoundError, NoServiceFoundError, NotOnlineError, RarExtractionError, ScrapeGameDownloadsError, SteamSearchError } from "./lib/errors";
 import { dirname, join, relative } from "path";
 import { spawnSync, execSync, spawn } from "child_process";
 import * as fs from 'fs/promises';
@@ -188,6 +188,27 @@ const program = Effect.gen(function* () {
         try: () => addon.task(),
         catch: () => new Error('Failed to create task') // Define a specific error if needed
       });
+
+      // check if the system is online first, and if not, then abort mission!
+      console.log('Checking online...');
+      yield* Effect.tryPromise({
+        try: async () => axios({
+          url: 'https://google.com',
+          timeout: 5000
+        }),
+        catch: () => new NotOnlineError()
+      }).pipe(
+        Effect.tap((out) => console.log(out)),
+        Effect.catchTag('NotOnlineError', (_) => {
+          addon.notify({
+            id: String(Math.floor(Math.random() * 10000)),
+            message: 'Steamrip Addon: Cannot access network check, stopping addon.',
+            type: 'error'
+          })
+
+          return Effect.dieMessage('Cannot access network check')
+        }),
+      )
       // check if we're on linux, and if so, run CHROME_PATH="$(flatpak info --show-location org.chromium.Chromium)/files/chromium/chrome" to set the chrome path
       if (process.platform === 'linux') {
         console.log('Setting CHROME_PATH for this device.');
