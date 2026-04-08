@@ -1,5 +1,4 @@
-import { PUPPETEER_OPTIONS } from "./services/BaseService";
-import { connect } from "puppeteer-real-browser";
+import { connectRealBrowser, stabilizeBrowserPage } from "./services/BaseService";
 
 export interface PopupConfig {
   title: string;
@@ -27,18 +26,17 @@ export async function showInfoPopup(config: PopupConfig): Promise<void> {
   
   const windowSize = config.windowSize || { width: 500, height: 400 };
   
-  const conn = await connect({
+  const conn = await connectRealBrowser({
     headless: false,
+    defaultViewport: windowSize,
     args: [
-      // Ensure visible info popup is not minimized
-      ...((PUPPETEER_OPTIONS?.args || []).filter(arg => arg !== '--start-minimized')),
       `--window-size=${windowSize.width},${windowSize.height}`,
       '--window-position=200,200'
     ]
   });
 
-  const { browser, page } = conn as { browser: any; page: any };
-  await page.setViewport(windowSize);
+  const { browser } = conn as { browser: any; page: any };
+  const page = await stabilizeBrowserPage(browser, conn.page);
 
   // Set up browser closure detection
   let browserClosed = false;
@@ -202,7 +200,7 @@ export async function showInfoPopup(config: PopupConfig): Promise<void> {
         ${config.footerNote ? 
           `<div class="footer-note">${config.footerNote}</div>` : ''}
         
-        <button class="continue-btn" onclick="window.close()">${config.buttonText}</button>
+        <button class="continue-btn" onclick="window.__steamripConfirmed = true">${config.buttonText}</button>
       </div>
     </body>
     </html>
@@ -211,7 +209,12 @@ export async function showInfoPopup(config: PopupConfig): Promise<void> {
   await page.setContent(htmlContent);
   
   try {
-    await page.waitForFunction(() => !document.body, { timeout: 0 });
+    if (isTestEnvironment) {
+      console.log(`[popup] Test environment detected, auto-confirming ${config.title}`);
+      return;
+    }
+
+    await page.waitForFunction(() => (window as any).__steamripConfirmed === true, { timeout: 0 });
   } catch (error) {
     if (browserClosed || page.isClosed()) {
       throw new Error(`User cancelled operation by closing ${config.title} dialog`);

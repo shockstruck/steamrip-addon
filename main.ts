@@ -14,8 +14,7 @@ import axios from "axios";
 import { Stream } from "stream";
 import { cloudflareSolve, CloudflareTestError } from "./lib/cloudflare";
 import { headerManager } from "./lib/header-manager";
-import { connect } from "puppeteer-real-browser";
-import { PUPPETEER_OPTIONS } from "./lib/services/BaseService";
+import { connectRealBrowser, PUPPETEER_OPTIONS } from "./lib/services/BaseService";
 import { applySetupOverrides } from "./lib/app-overrides";
 
 const baseAddon = new OGIAddon({
@@ -224,7 +223,7 @@ const program = Effect.gen(function* () {
       // check if chrome is installed on the device, and we can spawn a puppeteer-real-browser process
       // Set protocol timeout via environment variable to avoid Runtime.callFunctionOn timeout
       process.env.PUPPETEER_PROTOCOL_TIMEOUT = String(PUPPETEER_OPTIONS.protocolTimeout || 180000);
-      const chromeInstalled = yield* Effect.tryPromise(() => connect({ headless: true, disableXvfb: true, args: PUPPETEER_OPTIONS.args })).pipe(Effect.catchAll((err) => {
+      const chromeInstalled = yield* Effect.tryPromise(() => connectRealBrowser({ headless: true, disableXvfb: true })).pipe(Effect.catchAll((err) => {
         console.log('Error:', err);
         return Effect.succeed(undefined);
       }));

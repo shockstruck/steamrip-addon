@@ -1,8 +1,7 @@
 import type { Page } from "puppeteer";
 import readline from "readline";
-import { PUPPETEER_OPTIONS } from "./services/BaseService";
+import { connectRealBrowser, navigateBrowserPage } from "./services/BaseService";
 import { showInfoPopup } from "./popup-utils";
-import { connect } from "puppeteer-real-browser";
 
 /**
  * Shows an informational popup explaining what will happen with CLI captcha solving
@@ -154,11 +153,10 @@ export async function solveRecaptchaWithPopup(page: Page): Promise<string> {
   console.log("[steamrip-addon] Opening a clean captcha window for you to solve ...");
 
   // Launch a fresh Chromium instance with a clean, minimal UI
-  const conn = await connect({
+  const conn = await connectRealBrowser({
     headless: false,
+    defaultViewport: { width: 400, height: 550 },
     args: [
-      // Ensure visible window is not minimized
-      ...((PUPPETEER_OPTIONS?.args || []).filter(arg => arg !== '--start-minimized')),
       '--disable-web-security',
       '--disable-features=VizDisplayCompositor',
       '--disable-extensions',
@@ -193,21 +191,18 @@ export async function solveRecaptchaWithPopup(page: Page): Promise<string> {
   });
   
   try {
-    // Set a smaller, more focused viewport
-    await popupPage.setViewport({ width: 400, height: 550 });
-    
-    await popupPage.goto(page.url(), { waitUntil: "networkidle2" });
+    const activePopupPage = await navigateBrowserPage(browser as any, popupPage as any, page.url(), { waitUntil: "networkidle2" });
 
     // Wait a bit more for the page to fully load, then inject styles
     await new Promise(resolve => setTimeout(resolve, 1000));
     
     // Check if browser was closed during loading
-    if (browserClosed || popupPage.isClosed()) {
+    if (browserClosed || activePopupPage.isClosed()) {
       throw new Error("Captcha browser window was closed by user");
     }
     
     // Inject CSS to hide everything except the captcha and add some styling
-    await popupPage.evaluate(() => {
+    await activePopupPage.evaluate(() => {
       const style = document.createElement('style');
       style.textContent = `
         /* Hide everything by default */
@@ -270,7 +265,7 @@ export async function solveRecaptchaWithPopup(page: Page): Promise<string> {
     });
 
     // Wait for the token to appear (Google injects it into a hidden textarea once solved).
-    await popupPage.waitForFunction(
+    await activePopupPage.waitForFunction(
       () => {
         const ta = document.querySelector<HTMLTextAreaElement>(
           'textarea[name="g-recaptcha-response"], #g-recaptcha-response'
@@ -284,11 +279,11 @@ export async function solveRecaptchaWithPopup(page: Page): Promise<string> {
     );
 
     // Check if browser was closed during captcha solving
-    if (browserClosed || popupPage.isClosed()) {
+    if (browserClosed || activePopupPage.isClosed()) {
       throw new Error("Captcha browser window was closed by user");
     }
 
-    const token: string = await popupPage.evaluate(() => {
+    const token: string = await activePopupPage.evaluate(() => {
       const ta = document.querySelector<HTMLTextAreaElement>(
         'textarea[name="g-recaptcha-response"], #g-recaptcha-response'
       );

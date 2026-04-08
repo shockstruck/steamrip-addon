@@ -3,8 +3,8 @@ import type OGIAddon from "ogi-addon";
 import { headerManager, convertPuppeteerCookies } from "./header-manager";
 import axios, { type AxiosResponse } from "axios";
 import type { Page } from "puppeteer";
-import { connect, type PageWithCursor } from "puppeteer-real-browser";
-import { PUPPETEER_OPTIONS } from "./services/BaseService";
+import type { PageWithCursor } from "puppeteer-real-browser";
+import { connectRealBrowser, navigateBrowserPage, PUPPETEER_OPTIONS } from "./services/BaseService";
 
 export class CloudflareTestError extends Data.TaggedError('CloudflareTestError')<{
   url: string;
@@ -189,9 +189,27 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
     return false;
   });
 
+  const attachRequestCapture = (page: PageWithCursor | Page, capturedHeaders: Record<string, string>) =>
+    Effect.tryPromise({
+      try: async () => {
+        await page.setRequestInterception(true);
+        page.on('request', (request) => {
+          if (request.url().includes('steamrip.com') && Object.keys(capturedHeaders).length === 0) {
+            Object.entries(request.headers()).forEach(([key, value]) => {
+              if (value) {
+                capturedHeaders[key] = value;
+              }
+            });
+          }
+          request.continue();
+        });
+      },
+      catch: () => new Error('Failed to set request interception')
+    });
+
   // Set protocol timeout via environment variable to avoid Runtime.callFunctionOn timeout
   process.env.PUPPETEER_PROTOCOL_TIMEOUT = String(PUPPETEER_OPTIONS.protocolTimeout || 180000);
-  const headlessConn = yield* Effect.tryPromise(() => connect({ headless: true, disableXvfb: true, args: PUPPETEER_OPTIONS.args })).pipe(Effect.catchAll((err) => {
+  const headlessConn = yield* Effect.tryPromise(() => connectRealBrowser({ headless: true, disableXvfb: true })).pipe(Effect.catchAll((err) => {
     console.log('Failed to launch headless browser, will try visible browser:', err);
     return Effect.succeed(undefined);
   }));
@@ -201,35 +219,17 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
 
     // Try with visible browser directly
     const visibleConn = yield* Effect.tryPromise({
-      try: () => connect({ headless: false, turnstile: true, disableXvfb: true, args: [ ...(PUPPETEER_OPTIONS.args || [])] }),
+      try: () => connectRealBrowser({ headless: false, turnstile: true, disableXvfb: true }),
       catch: (error) => new Error(`Failed to launch browser: ${error}`)
     });
 
     const { browser, page: visiblePage } = visibleConn;
-
-    // Set up request interception for visible page
     const visibleCapturedHeaders: Record<string, string> = {};
-    yield* Effect.tryPromise({
-      try: () => visiblePage.setRequestInterception(true),
-      catch: () => new Error('Failed to set request interception')
-    });
-
-    visiblePage.on('request', (request) => {
-      // Capture headers from the first request to the target domain
-      if (request.url().includes('steamrip.com') && Object.keys(visibleCapturedHeaders).length === 0) {
-        Object.entries(request.headers()).forEach(([key, value]) => {
-          if (value) {
-            visibleCapturedHeaders[key] = value;
-          }
-        });
-      }
-      request.continue();
-    });
-
-    yield* Effect.tryPromise({
-      try: () => visiblePage.goto(url),
+    const activeVisiblePage = yield* Effect.tryPromise({
+      try: () => navigateBrowserPage(browser as any, visiblePage as any, url),
       catch: () => new Error('Failed to navigate to URL')
     });
+    yield* attachRequestCapture(activeVisiblePage, visibleCapturedHeaders).pipe(Effect.catchAll(() => Effect.void));
 
     yield* Effect.sync(() => addon.notify({
       message: 'Headless browser failed. Please solve the Cloudflare challenge in the opened browser window.',
@@ -237,7 +237,7 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
       type: 'warning',
     }));
 
-    const visibleResult = yield* contentWaiter(60, visiblePage);
+    const visibleResult = yield* contentWaiter(60, activeVisiblePage);
 
     if (!visibleResult) {
       // Immediately kill the browser window
@@ -261,7 +261,7 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
       throw new Error('Failed to solve Cloudflare captcha');
     } else {
       // Capture all headers from the visible page
-      const headers = yield* captureBrowserHeaders(visiblePage, visibleCapturedHeaders);
+      const headers = yield* captureBrowserHeaders(activeVisiblePage, visibleCapturedHeaders);
       console.log('Headers:', headers);
 
       // Verify we have Cloudflare headers before storing
@@ -301,32 +301,15 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
   }
 
   const { browser: browserHeadless, page } = headlessConn;
-
-  // Set up request interception to capture headers
   const capturedHeaders: Record<string, string> = {};
-  yield* Effect.tryPromise({
-    try: () => page.setRequestInterception(true),
-    catch: () => new Error('Failed to set request interception')
-  });
-
-  page.on('request', (request) => {
-    // Capture headers from the first request to the target domain
-    if (request.url().includes('steamrip.com') && Object.keys(capturedHeaders).length === 0) {
-      Object.entries(request.headers()).forEach(([key, value]) => {
-        if (value) {
-          capturedHeaders[key] = value;
-        }
-      });
-    }
-    request.continue();
-  });
   
-  yield* Effect.tryPromise({
-    try: () => page.goto(url),
+  const activeHeadlessPage = yield* Effect.tryPromise({
+    try: () => navigateBrowserPage(browserHeadless as any, page as any, url),
     catch: () => new Error('Failed to navigate to URL')
   });
+  yield* attachRequestCapture(activeHeadlessPage, capturedHeaders).pipe(Effect.catchAll(() => Effect.void));
 
-  const headlessResult = yield* contentWaiter(7, page);
+  const headlessResult = yield* contentWaiter(7, activeHeadlessPage);
   
   if (!headlessResult) {
     yield* Effect.sync(() => addon.notify({
@@ -341,37 +324,20 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
     });
     
     const visibleConn = yield* Effect.tryPromise({
-      try: () => connect({ headless: false, turnstile: true, disableXvfb: true, args: [ ...(PUPPETEER_OPTIONS.args || [])] }),
+      try: () => connectRealBrowser({ headless: false, turnstile: true, disableXvfb: true }),
       catch: () => new Error('Failed to launch browser')
     });
 
     const { browser, page: visiblePage } = visibleConn;
-
-    // Set up request interception for visible page too
     const visibleCapturedHeaders: Record<string, string> = {};
-    yield* Effect.tryPromise({
-      try: () => visiblePage.setRequestInterception(true),
-      catch: () => new Error('Failed to set request interception')
-    });
-
-    visiblePage.on('request', (request) => {
-      // Capture headers from the first request to the target domain
-      if (request.url().includes('steamrip.com') && Object.keys(visibleCapturedHeaders).length === 0) {
-        Object.entries(request.headers()).forEach(([key, value]) => {
-          if (value) {
-            visibleCapturedHeaders[key] = value;
-          }
-        });
-      }
-      request.continue();
-    });
     
-    yield* Effect.tryPromise({
-      try: () => visiblePage.goto(url),
+    const activeVisiblePage = yield* Effect.tryPromise({
+      try: () => navigateBrowserPage(browser as any, visiblePage as any, url),
       catch: () => new Error('Failed to navigate to URL')
     });
+    yield* attachRequestCapture(activeVisiblePage, visibleCapturedHeaders).pipe(Effect.catchAll(() => Effect.void));
     
-    const visibleResult = yield* pipe(contentWaiter(60, visiblePage), Effect.catchAll((err) => {
+    const visibleResult = yield* pipe(contentWaiter(60, activeVisiblePage), Effect.catchAll((err) => {
       console.log('Error:', err);
       return Effect.succeed(false);
     }));
@@ -398,7 +364,7 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
       throw new Error('Failed to solve Cloudflare captcha');
     } else {
       // Capture all headers from the visible page
-      const headers = yield* captureBrowserHeaders(visiblePage, visibleCapturedHeaders);
+      const headers = yield* captureBrowserHeaders(activeVisiblePage, visibleCapturedHeaders);
       console.log('Headers:', headers);
 
       // Verify we have Cloudflare headers before storing
@@ -438,7 +404,7 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
   }
 
   // Capture all headers from the headless browser
-  const headers = yield* captureBrowserHeaders(page, capturedHeaders);
+  const headers = yield* captureBrowserHeaders(activeHeadlessPage, capturedHeaders);
   
   // Verify we have Cloudflare headers before storing
   const cloudflareCookies = headers.cookies.filter(cookie => 

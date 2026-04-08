@@ -1,0 +1,55 @@
+import { describe, expect, it } from "bun:test";
+import {
+  isBlankBrowserPageUrl,
+  normalizeBrowserArgs,
+  pickPrimaryBrowserPage,
+  type BrowserPageLike,
+} from "../lib/services/BaseService";
+
+class FakePage implements BrowserPageLike {
+  constructor(
+    private readonly currentUrl: string,
+    private readonly closed = false
+  ) {}
+
+  url(): string {
+    return this.currentUrl;
+  }
+
+  isClosed(): boolean {
+    return this.closed;
+  }
+}
+
+describe("browser launch helpers", () => {
+  it("removes minimized launch flags for visible browsers", () => {
+    expect(
+      normalizeBrowserArgs(
+        ["--start-minimized", "--lang=en-US,en;q=0.9", "--start-minimized"],
+        { headless: false }
+      )
+    ).toEqual(["--lang=en-US,en;q=0.9"]);
+  });
+
+  it("keeps minimized launch flags for headless browsers", () => {
+    expect(
+      normalizeBrowserArgs(["--start-minimized", "--lang=en-US,en;q=0.9"], {
+        headless: true,
+      })
+    ).toEqual(["--start-minimized", "--lang=en-US,en;q=0.9"]);
+  });
+
+  it("treats Chromium blank tabs as blank pages", () => {
+    expect(isBlankBrowserPageUrl("about:blank")).toBe(true);
+    expect(isBlankBrowserPageUrl("chrome://newtab/")).toBe(true);
+    expect(isBlankBrowserPageUrl("chrome-search://local-ntp/local-ntp.html")).toBe(true);
+    expect(isBlankBrowserPageUrl("https://steamrip.com")).toBe(false);
+  });
+
+  it("prefers a real page over a blank fallback tab", () => {
+    const blankPage = new FakePage("about:blank");
+    const realPage = new FakePage("https://steamrip.com");
+
+    expect(pickPrimaryBrowserPage([blankPage, realPage], blankPage)).toBe(realPage);
+  });
+});

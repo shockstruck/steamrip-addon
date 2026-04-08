@@ -25,7 +25,6 @@ export default class BuzzheavierService extends DLService {
       try: async () => {
         const { browser, page } = await launchStandardBrowser({
           headless: true,
-          args: PUPPETEER_OPTIONS.args,
         });
         return { browser, page } as { browser: Browser; page: Page };
       },

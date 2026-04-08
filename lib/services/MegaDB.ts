@@ -1,4 +1,4 @@
-import { createCdpSessionSafe, DLService, PUPPETEER_OPTIONS, launchStandardBrowser } from "./BaseService";
+import { createCdpSessionSafe, DLService, launchStandardBrowser, navigateBrowserPage } from "./BaseService";
 import { Effect } from "effect";
 import { MegaDBError, DownloadCatcherError } from "../errors";
 import type { EventResponse, SearchResult } from "ogi-addon";
@@ -46,8 +46,7 @@ export default class MegaDBService extends DLService {
           new ConfigurationBuilder()
         )
         const { browser, page } = await launchStandardBrowser({ 
-          headless: false, // Non-headless like FileCrypt for user interaction
-          args: PUPPETEER_OPTIONS.args 
+          headless: false // Non-headless like FileCrypt for user interaction
         });
         return { browser, page } as { browser: Browser; page: Page };
       },
@@ -64,26 +63,26 @@ export default class MegaDBService extends DLService {
           // Notify user about captcha/interaction requirement
           
           // Navigate to the URL
-          const mainPage: any = page;
-          const popupHandler = async () => closePopupPages(browser as any, mainPage);
+          let activePage: any = page;
+          const popupHandler = async () => closePopupPages(browser as any, activePage);
           try {
             (browser as any).on?.("targetcreated", popupHandler);
           } catch {}
 
-          yield* Effect.tryPromise({
-            try: () => page.goto(url, { waitUntil: 'domcontentloaded' }),
+          activePage = yield* Effect.tryPromise({
+            try: () => navigateBrowserPage(browser as any, page as any, url, { waitUntil: 'domcontentloaded' }),
             catch: (error) => new MegaDBError({ url, error }),
           });
 
           // Wait for the page to load completely
           yield* Effect.tryPromise({
-            try: () => page.waitForNetworkIdle({ timeout: 10000 }),
+            try: () => activePage.waitForNetworkIdle({ timeout: 10000 }),
             catch: (error) => new MegaDBError({ url, error }),
           });
 
           // Close any popups that opened during load.
           yield* Effect.sleep(1000);
-          yield* Effect.promise(() => closePopupPages(browser as any, mainPage)).pipe(
+          yield* Effect.promise(() => closePopupPages(browser as any, activePage)).pipe(
             Effect.catchAll(() => Effect.void)
           );
 
@@ -107,7 +106,7 @@ export default class MegaDBService extends DLService {
             try: async () => {
               for (const selector of downloadButtonSelectors) {
                 try {
-                  await page.waitForSelector(selector, { timeout: 2000 });
+                  await activePage.waitForSelector(selector, { timeout: 2000 });
                   break;
                 } catch {
                   // Continue to next selector
@@ -121,7 +120,7 @@ export default class MegaDBService extends DLService {
           const downloadPromise = Effect.async<string | undefined, DownloadCatcherError>((resume) => {
             (async () => {
               try {
-                const cdp = await createCdpSessionSafe(page as any);
+                const cdp = await createCdpSessionSafe(activePage as any);
                 await cdp.send('Browser.setDownloadBehavior', {
                   behavior: 'allow',
                   downloadPath: '/tmp',
@@ -173,7 +172,7 @@ export default class MegaDBService extends DLService {
           // Get headers from the download URL
           const headers: Record<string, string> = yield* Effect.tryPromise({
             try: async () => {
-              const client = await createCdpSessionSafe(page as any);
+              const client = await createCdpSessionSafe(activePage as any);
               await client.send('Network.enable');
               let foundHeaders: Record<string, string> = {};
 
@@ -190,7 +189,7 @@ export default class MegaDBService extends DLService {
 
               // Try to trigger a HEAD request to get headers
               try {
-                await page.evaluate((url) => {
+                await activePage.evaluate((url: string | URL | Request) => {
                   return fetch(url, { method: 'HEAD', credentials: 'include' });
                 }, downloadUrl);
               } catch {

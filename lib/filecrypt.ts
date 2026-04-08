@@ -1,5 +1,5 @@
 import type { Browser, Page } from "puppeteer";
-import { PUPPETEER_OPTIONS, launchStandardBrowser } from "./services/BaseService";
+import { launchStandardBrowser } from "./services/BaseService";
 import { showInfoPopup } from "./popup-utils";
 import { Effect } from "effect";
 import { FileCryptBrowserClosedError, FileCryptRedirectError, FileCryptUrlError, NetworkError } from "./errors";
@@ -68,7 +68,7 @@ export function processFilecryptUrl(url: string, options: FilecryptOptions = {})
 
   const acquireConn = Effect.tryPromise({
     try: async () => {
-      const { browser, page } = await launchStandardBrowser({ headless, args: PUPPETEER_OPTIONS.args });
+      const { browser, page } = await launchStandardBrowser({ headless });
       return { browser, page } as { browser: Browser; page: Page };
     },
     catch: (error) => new NetworkError({ url, error })

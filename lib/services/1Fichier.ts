@@ -12,7 +12,7 @@ export default class FichierService extends DLService {
   scrapeDownloadLinks(url: string, event: EventResponse<SearchResult>): Effect.Effect<{ name: string; url: string; headers: Record<string, string> }[], FichierError> {
     const acquireConn = Effect.tryPromise({
       try: async () => {
-        const { browser, page } = await launchStandardBrowser({ headless: PUPPETEER_OPTIONS.headless, args: PUPPETEER_OPTIONS.args });
+        const { browser, page } = await launchStandardBrowser({ headless: PUPPETEER_OPTIONS.headless });
         return { browser, page } as { browser: Browser; page: Page };
       },
       catch: (error) => new FichierError({ url, error })

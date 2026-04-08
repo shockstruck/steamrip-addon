@@ -1,10 +1,9 @@
 
-import { createCdpSessionSafe, DLService, PUPPETEER_OPTIONS, launchStandardBrowser } from "./BaseService";
+import { createCdpSessionSafe, DLService, connectRealBrowser, navigateBrowserPage } from "./BaseService";
 import { Effect } from "effect";
 import { DownloadCatcherError, UnknownServiceError } from "../errors";
 import type { EventResponse, SearchResult } from "ogi-addon";
 import { ConfigurationBuilder } from "ogi-addon";
-import { connect } from "puppeteer-real-browser";
 import { PuppeteerExtraPluginAdblocker } from "puppeteer-extra-plugin-adblocker";
 
 function isTargetCloseError(error: unknown): boolean {
@@ -55,9 +54,8 @@ export default class UnknownService extends DLService {
           new ConfigurationBuilder()
         )
         console.log('Acquiring connection to', new URL(url).hostname);
-        const { browser, page } = await connect({ 
+        const { browser, page } = await connectRealBrowser({ 
           headless: false, // Non-headless like FileCrypt for user interaction
-          args: PUPPETEER_OPTIONS.args,
           disableXvfb: true,
           plugins: [
             new PuppeteerExtraPluginAdblocker({
@@ -83,14 +81,14 @@ export default class UnknownService extends DLService {
           console.log('Navigating to', url);
 
           // Close ad/pop-up tabs automatically; keeps the main page stable.
-          const mainPage: any = page;
-          const popupHandler = async () => closePopupPages(browser as any, mainPage);
+          let activePage: any = page;
+          const popupHandler = async () => closePopupPages(browser as any, activePage);
           try {
             (browser as any).on?.("targetcreated", popupHandler);
           } catch {}
 
-          yield* Effect.tryPromise({
-            try: () => page.goto(url, { waitUntil: 'domcontentloaded' }),
+          activePage = yield* Effect.tryPromise({
+            try: () => navigateBrowserPage(browser as any, page as any, url, { waitUntil: 'domcontentloaded' }),
             catch: (error) =>
               new UnknownServiceError({
                 url,
@@ -102,7 +100,7 @@ export default class UnknownService extends DLService {
 
           // Give any immediate popups a moment to appear, then close them.
           yield* Effect.sleep(1000);
-          yield* Effect.promise(() => closePopupPages(browser as any, mainPage)).pipe(
+          yield* Effect.promise(() => closePopupPages(browser as any, activePage)).pipe(
             Effect.catchAll(() => Effect.void)
           );
           // Notify user about captcha/interaction requirement
@@ -113,7 +111,7 @@ export default class UnknownService extends DLService {
           const downloadPromise = Effect.async<string | undefined, DownloadCatcherError>((resume) => {
             (async () => {
               try {
-                const cdp = await createCdpSessionSafe(page as any);
+                const cdp = await createCdpSessionSafe(activePage as any);
                 await cdp.send('Browser.setDownloadBehavior', {
                   behavior: 'allow',
                   downloadPath: '/tmp',
@@ -173,7 +171,7 @@ export default class UnknownService extends DLService {
           // Get headers from the download URL
           const headers: Record<string, string> = yield* Effect.tryPromise({
             try: async () => {
-              const client = await createCdpSessionSafe(page as any);
+              const client = await createCdpSessionSafe(activePage as any);
               await client.send('Network.enable');
               let foundHeaders: Record<string, string> = {};
 
@@ -190,7 +188,7 @@ export default class UnknownService extends DLService {
 
               // Try to trigger a HEAD request to get headers
               try {
-                await page.evaluate((url) => {
+                await activePage.evaluate((url: string | URL | Request) => {
                   return fetch(url, { method: 'HEAD', credentials: 'include' });
                 }, downloadUrl);
               } catch {

@@ -5,6 +5,7 @@ import puppeteer from "puppeteer-extra";
 import stealth from "puppeteer-extra-plugin-stealth";
 import adblock from "puppeteer-extra-plugin-adblocker";
 import type { Browser, Page } from "puppeteer";
+import { connect } from "puppeteer-real-browser";
 
 // Minimal options used for puppeteer-real-browser connect
 export interface RealBrowserLaunchOptions {
@@ -27,6 +28,180 @@ export const PUPPETEER_OPTIONS: RealBrowserLaunchOptions = {
   defaultViewport: { width: 1024, height: 700 },
   protocolTimeout: 180000, // 3 minutes to handle slow Cloudflare challenges
 };
+
+const BLANK_BROWSER_URL_PREFIXES = [
+  "about:blank",
+  "chrome://newtab",
+  "chrome://new-tab-page",
+  "chrome-search://local-ntp",
+  "data:,",
+] as const;
+
+export interface BrowserPageLike {
+  url(): string;
+  isClosed(): boolean;
+  close?(): Promise<void>;
+  bringToFront?(): Promise<void>;
+}
+
+export interface BrowserWithPagesLike<TPage extends BrowserPageLike = BrowserPageLike> {
+  pages(): Promise<TPage[]>;
+  newPage?(): Promise<TPage>;
+}
+
+export interface NavigablePageLike extends BrowserPageLike {
+  goto(url: string, options?: Parameters<Page["goto"]>[1]): Promise<unknown>;
+}
+
+export function isBlankBrowserPageUrl(url: string | null | undefined): boolean {
+  if (!url) {
+    return true;
+  }
+
+  return BLANK_BROWSER_URL_PREFIXES.some(prefix => url.startsWith(prefix));
+}
+
+function getPageUrl(page: BrowserPageLike): string {
+  try {
+    return page.url();
+  } catch {
+    return "";
+  }
+}
+
+function dedupeArgs(args: string[]): string[] {
+  return [...new Set(args)];
+}
+
+export function normalizeBrowserArgs(args: string[] = [], options?: { headless?: boolean }): string[] {
+  const headless = options?.headless ?? true;
+  const normalizedArgs = headless ? args : args.filter(arg => arg !== "--start-minimized");
+  return dedupeArgs(normalizedArgs);
+}
+
+function buildBrowserArgs(args: string[] = [], options?: { headless?: boolean }): string[] {
+  return normalizeBrowserArgs([...(PUPPETEER_OPTIONS.args ?? []), ...args], options);
+}
+
+export function pickPrimaryBrowserPage<TPage extends BrowserPageLike>(
+  pages: TPage[],
+  fallback?: TPage
+): TPage | undefined {
+  const openPages = pages.filter(page => page && !page.isClosed());
+  const fallbackPage = fallback && !fallback.isClosed() ? fallback : undefined;
+
+  if (openPages.length === 0) {
+    return fallbackPage;
+  }
+
+  const nonBlankPages = openPages.filter(page => !isBlankBrowserPageUrl(getPageUrl(page)));
+  return nonBlankPages.at(-1) ?? openPages.at(-1) ?? fallbackPage;
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise(resolve => setTimeout(resolve, ms));
+}
+
+export async function stabilizeBrowserPage<TPage extends BrowserPageLike>(
+  browser: BrowserWithPagesLike<TPage>,
+  fallback: TPage,
+  options?: { attempts?: number; settleMs?: number }
+): Promise<TPage> {
+  let page = fallback;
+  const attempts = options?.attempts ?? 5;
+  const settleMs = options?.settleMs ?? 150;
+
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const pages = await browser.pages().catch(() => [] as TPage[]);
+    page = pickPrimaryBrowserPage(pages, page) ?? page;
+
+    if (!isBlankBrowserPageUrl(getPageUrl(page))) {
+      break;
+    }
+
+    if (attempt < attempts - 1) {
+      await sleep(settleMs);
+    }
+  }
+
+  await page.bringToFront?.().catch(() => undefined);
+  return page;
+}
+
+async function recoverBrowserPage<TPage extends NavigablePageLike>(
+  browser: BrowserWithPagesLike<TPage>,
+  currentPage: TPage
+): Promise<TPage> {
+  const stabilizedPage = await stabilizeBrowserPage(browser, currentPage);
+  if (stabilizedPage !== currentPage && !stabilizedPage.isClosed()) {
+    return stabilizedPage;
+  }
+
+  if (typeof browser.newPage === "function") {
+    const freshPage = await browser.newPage();
+    return await stabilizeBrowserPage(browser, freshPage);
+  }
+
+  return stabilizedPage;
+}
+
+export async function navigateBrowserPage<TPage extends NavigablePageLike>(
+  browser: BrowserWithPagesLike<TPage>,
+  initialPage: TPage,
+  url: string,
+  options?: Parameters<Page["goto"]>[1]
+): Promise<TPage> {
+  let page = await stabilizeBrowserPage(browser, initialPage);
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await page.bringToFront?.().catch(() => undefined);
+      await page.goto(url, options);
+
+      const currentUrl = getPageUrl(page);
+      if (!isBlankBrowserPageUrl(currentUrl)) {
+        return page;
+      }
+
+      lastError = new Error(`Browser stayed on ${currentUrl || "a blank page"} while navigating to ${url}`);
+    } catch (error) {
+      lastError = error;
+    }
+
+    page = await recoverBrowserPage(browser, page);
+  }
+
+  if (lastError instanceof Error) {
+    throw lastError;
+  }
+
+  throw new Error(`Failed to navigate browser page to ${url}`);
+}
+
+type RealBrowserConnectOptions = Parameters<typeof connect>[0] & {
+  defaultViewport?: { width: number; height: number } | null;
+};
+
+type RealBrowserConnectResult = Awaited<ReturnType<typeof connect>>;
+
+export async function connectRealBrowser(
+  options: RealBrowserConnectOptions = {}
+): Promise<RealBrowserConnectResult> {
+  const headless = options.headless ?? false;
+  const connectResult = await connect({
+    ...options,
+    headless,
+    args: buildBrowserArgs(options.args, { headless }),
+    connectOption: {
+      defaultViewport: options.connectOption?.defaultViewport ?? options.defaultViewport ?? PUPPETEER_OPTIONS.defaultViewport,
+      ...(options.connectOption ?? {}),
+    },
+  });
+
+  const page = await stabilizeBrowserPage(connectResult.browser as unknown as BrowserWithPagesLike<RealBrowserConnectResult["page"]>, connectResult.page);
+  return { ...connectResult, page };
+}
 
 // Structural types to avoid cross-library type conflicts
 export interface CdpSessionLike {
@@ -58,19 +233,18 @@ export async function launchStandardBrowser(
   puppeteer.use(stealth());
   puppeteer.use(adblock());
 
+  const headless = options?.headless ?? PUPPETEER_OPTIONS.headless;
   const launchOptions: LaunchOptions = {
-    headless: options?.headless ?? PUPPETEER_OPTIONS.headless,
+    headless,
     defaultViewport:
       options?.defaultViewport ?? PUPPETEER_OPTIONS.defaultViewport,
-    args: [
-      ...(PUPPETEER_OPTIONS.args ?? []),
-      ...((options?.args as string[] | undefined) ?? []),
-    ],
+    args: buildBrowserArgs((options?.args as string[] | undefined) ?? [], { headless: headless !== false }),
     protocolTimeout: options?.protocolTimeout ?? PUPPETEER_OPTIONS.protocolTimeout ?? 180000,
   } as LaunchOptions;
 
   const browser = await puppeteer.launch(launchOptions);
   const page = await browser.newPage();
+  await page.bringToFront().catch(() => undefined);
   return { browser, page };
 }
 
