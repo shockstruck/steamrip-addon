@@ -52,8 +52,7 @@ const SETUP_OVERRIDES: SetupOverridesMap = {
             // disable icu dll as it breaks the game
             'icuuc=d',
             'icu=d'
-          ],
-          protonVersion: "UMU-Proton",
+          ]
         },
       }
       : {},
