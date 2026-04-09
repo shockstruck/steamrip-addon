@@ -816,7 +816,7 @@ const program = Effect.gen(function* () {
             umu: {
               umuId: `steam:${appID}`,
               dllOverrides: [],
-              protonVersion: 'UMU-Latest'
+              protonVersion: 'UMU-Proton'
             }
           };
           return yield* Effect.succeed(
@@ -968,7 +968,7 @@ const program = Effect.gen(function* () {
         umu: {
           umuId: `steam:${appID}`,
           dllOverrides: winedlls.map(dll => dll + '=n,b'),
-          protonVersion: 'UMU-Latest'
+          protonVersion: 'UMU-Proton'
         }
       };
 

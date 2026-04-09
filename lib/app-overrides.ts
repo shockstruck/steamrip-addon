@@ -32,7 +32,7 @@ const SETUP_OVERRIDES: SetupOverridesMap = {
           umu: {
             umuId: `steam:${context.appID}`,
             dllOverrides: [],
-            protonVersion: "UMU-Latest",
+            protonVersion: "UMU-Proton",
           },
         }
       : {},
@@ -53,7 +53,7 @@ const SETUP_OVERRIDES: SetupOverridesMap = {
             'icuuc=d',
             'icu=d'
           ],
-          protonVersion: "UMU-Latest",
+          protonVersion: "UMU-Proton",
         },
       }
       : {},
