@@ -262,7 +262,6 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
     } else {
       // Capture all headers from the visible page
       const headers = yield* captureBrowserHeaders(activeVisiblePage, visibleCapturedHeaders);
-      console.log('Headers:', headers);
 
       // Verify we have Cloudflare headers before storing
       const cloudflareCookies = headers.cookies.filter(cookie =>
@@ -365,7 +364,6 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
     } else {
       // Capture all headers from the visible page
       const headers = yield* captureBrowserHeaders(activeVisiblePage, visibleCapturedHeaders);
-      console.log('Headers:', headers);
 
       // Verify we have Cloudflare headers before storing
       const cloudflareCookies = headers.cookies.filter(cookie =>
@@ -450,7 +448,6 @@ const captureBrowserHeaders = (page: PageWithCursor, capturedHeaders: Record<str
   });
 
   // Filter down to steamrip cookies
-  console.log('Cookies:', cookies);
   const steamripCookies = cookies.filter(cookie => cookie.domain.includes('steamrip.com'));
   const convertedCookies = convertPuppeteerCookies(steamripCookies);
 

@@ -197,7 +197,6 @@ const program = Effect.gen(function* () {
         }),
         catch: () => new NotOnlineError()
       }).pipe(
-        Effect.tap((out) => console.log(out)),
         Effect.catchTag('NotOnlineError', (_) => {
           addon.notify({
             id: String(Math.floor(Math.random() * 10000)),
@@ -490,7 +489,6 @@ const program = Effect.gen(function* () {
 
       return yield* Effect.gen(function*() {
         let lastError: unknown = null;
-        console.log("Services", services);
         for (const serviceInfo of services) {
           try {
             console.log(`Trying service: ${serviceInfo.name}`);
@@ -509,12 +507,10 @@ const program = Effect.gen(function* () {
               )
               if (fcResult.length === 0 || !fcResult[0].url) {
                 // throw new FileCryptError({ url: currentUrl, error: new Error('FileCrypt did not return a URL') });
-                console.log('FileCrypt did not return a URL', fcResult);
                 continue;
               }
               const nextServiceName = getServiceNameFromUrl(fcResult[0].url);
               if (!nextServiceName) {
-                console.log('No service found', fcResult[0].url);
                 continue;
               }
               service = yield* getService(nextServiceName);
@@ -527,8 +523,7 @@ const program = Effect.gen(function* () {
                 console.error('Error', e);
                 return Effect.succeed([]);
               })
-            ); 
-            console.log('download found', downloadUrls);
+            );
             // test the download links to see if we can get a 200 response
             let linksGood = true;
             // for (const downloadUrl of downloadUrls) {
@@ -554,11 +549,9 @@ const program = Effect.gen(function* () {
             // }
 
             if (!linksGood) {
-              console.log('No working links found', downloadUrls);
               continue;
             }
             if (downloadUrls.length === 0) {
-              console.log('No download urls found', downloadUrls);
               continue;
             }
             // Found a working service, break out
@@ -622,7 +615,6 @@ const program = Effect.gen(function* () {
     const setupEffect = Effect.fn('setupEffect')(function*() {
       const programFiles7zip = join(process.env['ProgramFiles'] || 'C:\\Program Files', '7-Zip', '7z.exe');
       const file = multiPartFiles?.[0];
-      console.log("File", file);
       if (!file) return yield* Effect.fail(new NoFileFoundError());
 
       const showErrorScreen = async () => {
@@ -642,7 +634,6 @@ const program = Effect.gen(function* () {
       });
       if (files.length > 1) {
         event.log('Found other files in the path, deleting them...');
-        console.log("Files", files);
         for (const fileName of files) {
           if (fileName !== file.name) {
             const result = yield* pipe(
@@ -661,7 +652,6 @@ const program = Effect.gen(function* () {
                 return Effect.succeed(false);
               })
             );
-            console.log("Result in deleting file:", fileName, result);
           }
         }
       }
@@ -679,7 +669,6 @@ const program = Effect.gen(function* () {
       }
       else if (process.platform === 'darwin' || process.platform === 'linux') {
         // use 'unrar' instead of 7z
-        console.log(join(path, file.name));
         const result = yield* Effect.tryPromise({
           try: () => new Promise<{ error?: Error; status: number }>((resolve) => {
             const child = spawn('unrar', [
@@ -699,7 +688,6 @@ const program = Effect.gen(function* () {
           }),
           catch: (error) => ({ error: error as Error, status: 1 })
         });
-        console.log(result);
         if (result.error) {
           console.error('Error extracting archive', result);
           console.error('Error extracting archive', result.error);
@@ -932,11 +920,6 @@ const program = Effect.gen(function* () {
         .filter(file => file.toLowerCase().endsWith('.dll'))
         .map(file => file.replace(/\.dll$/i, ''));
 
-
-
-      console.log("Found dlls", winedlls);
-
-
       // write to the game install cwd a "steamrip-info.json"
 
       const { title }: { title: string | undefined } = yield* (manifest ? pipe(
@@ -979,7 +962,6 @@ const program = Effect.gen(function* () {
         executablePath: input.executable as string,
         dllOverrides: winedlls.map(dll => dll + '=n,b'),
       });
-      console.log("Response", finalResponse);
       return yield* Effect.succeed(finalResponse);
     });
 
