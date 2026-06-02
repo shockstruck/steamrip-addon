@@ -6,7 +6,7 @@
 
 import Scraper from '../lib/scraper';
 import { describe, it, expect } from 'bun:test';
-import BuzzHeavierService from '../lib/services/BuzzHeavier';
+import BzzhrService from '../lib/services/Bzzhr';
 
 
 type ValidLink = 'steamrip' | 'buzzheavier' | '1fichier' | 'pixeldrain' | 'gofile' | 'filecrypt-test';
@@ -47,7 +47,7 @@ describe('Steamrip', () => {
 
 describe('Buzzheavier', () => {
   it('can scrape download links', async () => {
-    const service = new BuzzHeavierService();
+    const service = new BzzhrService();
     const links = await Effect.runPromise(service.scrapeDownloadLinks(linksMap.buzzheavier, emptyEvent));
     expect(links).toBeDefined();
     expect(links.length).toBeGreaterThan(0);

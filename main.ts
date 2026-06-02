@@ -1,7 +1,7 @@
 import { JSDOM } from 'jsdom';
 import OGIAddon, { ConfigurationBuilder, EventResponse, SearchTool, type SetupEventResponse, type SearchResult } from "ogi-addon";
 import Scraper from "./lib/scraper";
-import { getService, getServiceNameFromUrl } from "./lib/services/matcher";
+import { rankDownloadLinks, resolveServiceFromUrl, type DownloadLink } from "./lib/services/matcher";
 import FileCryptService from "./lib/services/FileCrypt";
 import { Context, Effect, Layer, Match, pipe } from "effect";
 import { BunRuntime } from "@effect/platform-bun";
@@ -396,101 +396,83 @@ const program = Effect.gen(function* () {
   });
 
   addon.on('request-dl', (appID, info, event) => {
-    event.defer();
+    const searchEvent = event as EventResponse<SearchResult>;
+    searchEvent.defer();
 
     const getDownloadLinks = Effect.try({
       try: () => {
         const url = info.manifest?.url;
-        if (!url) throw new NoGameFoundError({ query: String(appID) });
+        if (typeof url !== 'string' || !url) throw new NoGameFoundError({ query: String(appID) });
         return scraper.scrapeGameDownloads(url);
       },
       catch: (e) => e instanceof NoGameFoundError ? e : new ScrapeGameDownloadsError({ game: String(appID) })
     });
 
-    const findWorkingService = Effect.fn('findWorkingService')(function*(links: { service: string; url: string }[], event: EventResponse<SearchResult>) {
-      // Use correct effect piping, types, and avoid 'any'
-
-      type Link = { service: string; url: string };
-      type ServiceInfo = { name: string; url: string; priority: number };
-
-      const services = yield* pipe(
-        Effect.succeed(links as Link[]),
+    const findWorkingService = Effect.fn('findWorkingService')(function*(links: DownloadLink[], event: EventResponse<SearchResult>) {
+      const ranked = yield* pipe(
+        Effect.succeed(links),
         Effect.andThen((links) => {
           if (addon.config.getBooleanValue('manualSelect') ?? false) {
             return Effect.promise(async () => {
-              const options = links.map(link => link.service);
+              const resolved = await Effect.runPromise(
+                Effect.forEach(links, (link) =>
+                  resolveServiceFromUrl(link.url).pipe(
+                    Effect.map((service) => ({ service, url: link.url }))
+                  )
+                )
+              );
               const config = new ConfigurationBuilder()
                 .addStringOption(option =>
                   option
                     .setName('service')
                     .setDisplayName('Service')
                     .setDescription('Please select the service you want to use for downloading this game.')
-                    .setAllowedValues(options)
+                    .setAllowedValues(resolved.map(({ service }) => service.name))
                 );
               const input = await event.askForInput(
                 'Manual Service Selection',
                 'Please select the service you want to use for downloading this game.',
                 config
               );
-              const selectedLink = links.find(link => link.service === input.service);
-              return selectedLink ? [selectedLink] : links;
+              const selected = resolved.find(({ service }) => service.name === input.service);
+              return selected ? [{ url: selected.url }] : links;
             });
           }
           return Effect.succeed(links);
         }),
-        Effect.andThen((links) =>
-          Effect.forEach(links, (link) =>
-            Effect.gen(function* () {
-              const serviceName = getServiceNameFromUrl(link.url);
-              if (!serviceName) return null;
-              const service = yield* getService(serviceName);
-              return {
-                name: serviceName,
-                url: link.url,
-                priority: service.priority
-              } as ServiceInfo;
-            })
-          )
-        ),
-        Effect.map((serviceInfos) =>
-          serviceInfos
-            .filter((s): s is ServiceInfo => !!s)
-            .sort((a, b) => b.priority - a.priority)
-        )
+        Effect.andThen(rankDownloadLinks)
       );
 
       return yield* Effect.gen(function*() {
         let lastError: unknown = null;
-        for (const serviceInfo of services) {
+        for (const { service, url } of ranked) {
           try {
-            console.log(`Trying service: ${serviceInfo.name}`);
-            let service = yield* getService(serviceInfo.name);
-            if (service.isCaptchaBased() && addon.config.getBooleanValue('disallowCaptchaBased')) {
-              console.log('Skipping captcha based service', serviceInfo.name);
+            console.log(`Trying service: ${service.name}`);
+            let currentService = service;
+            if (currentService.isCaptchaBased() && addon.config.getBooleanValue('disallowCaptchaBased')) {
+              console.log('Skipping captcha based service', currentService.name);
               continue;
             }
 
-            let currentUrl = serviceInfo.url;
+            let currentUrl = url;
 
-            if (service instanceof FileCryptService) {
+            if (currentService instanceof FileCryptService) {
               const fcResult = yield* pipe(
-                service.scrapeDownloadLinks(currentUrl, event),
-                Effect.catchAll(e => Effect.succeed([]))
-              )
+                currentService.scrapeDownloadLinks(currentUrl, event),
+                Effect.catchAll(() => Effect.succeed([]))
+              );
               if (fcResult.length === 0 || !fcResult[0].url) {
-                // throw new FileCryptError({ url: currentUrl, error: new Error('FileCrypt did not return a URL') });
                 continue;
               }
-              const nextServiceName = getServiceNameFromUrl(fcResult[0].url);
-              if (!nextServiceName) {
+              currentService = yield* resolveServiceFromUrl(fcResult[0].url);
+              if (currentService.priority === 0) {
                 continue;
               }
-              service = yield* getService(nextServiceName);
               currentUrl = fcResult[0].url;
             }
 
             const downloadUrls = yield* pipe(
-              service.scrapeDownloadLinks(currentUrl, event),
+              currentService.scrapeDownloadLinks(currentUrl, event),
               Effect.catchAll(e => { 
                 console.error('Error', e);
                 return Effect.succeed([]);
@@ -547,7 +529,7 @@ const program = Effect.gen(function* () {
     const requestDlEffect = Effect.fn('requestDlEffect')(function*() {
       const links = yield* getDownloadLinks;
       
-      const downloadDetails = yield* findWorkingService(yield* links, event);
+      const downloadDetails = yield* findWorkingService(yield* links, searchEvent);
       
       
       return {
@@ -569,10 +551,10 @@ const program = Effect.gen(function* () {
             type: 'warning',
           });
         }
-        event.fail('Failed to get download link');
+        searchEvent.fail('Failed to get download link');
         return Effect.fail(error);
       }),
-      Effect.andThen(res => event.resolve(res)),
+      Effect.andThen(res => searchEvent.resolve(res)),
       Effect.runFork
     );
   });

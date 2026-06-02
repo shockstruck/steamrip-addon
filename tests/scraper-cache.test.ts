@@ -7,7 +7,7 @@ import { Effect } from 'effect';
 describe('Scraper Cache', () => {
   let scraper: Scraper;
   const testUrl = 'https://steamrip.com/test-game';
-  const testData = [{ service: 'TEST', url: 'https://example.com/test' }];
+  const testData = [{ url: 'https://example.com/test' }];
 
   beforeEach(async () => {
     scraper = new Scraper();

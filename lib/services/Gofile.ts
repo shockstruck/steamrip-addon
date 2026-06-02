@@ -2,6 +2,7 @@ import { DLService } from "./BaseService";
 import { Effect } from "effect";
 import { GofilePasswordRequiredError, GofileScrapeError } from "../errors";
 import type { EventResponse, SearchResult } from "ogi-addon";
+import { join } from "path";
 
 interface GofileApiResponse {
   status: string;
@@ -19,37 +20,135 @@ interface GofileApiResponse {
 
 interface GofileContent {
   id: string;
-  type: 'file' | 'folder';
+  type: "file" | "folder";
   name: string;
   link?: string;
-  children?: Record<string, GofileContent>;
+}
+
+export type GofileDownloadLink = {
+  name: string;
+  url: string;
+  headers: Record<string, string>;
+};
+
+const GOFILE_ORIGIN = "https://gofile.io";
+const GOFILE_API = "https://api.gofile.io";
+const WEBSITE_TOKEN_SALT = "g4f8fd9f12h14g";
+const DEFAULT_USER_AGENT = "Mozilla/5.0";
+const MAX_RETRIES = Number.parseInt(process.env.GF_MAX_RETRIES ?? "5", 10);
+const REQUEST_TIMEOUT_MS = Number.parseFloat(process.env.GF_TIMEOUT ?? "15") * 1000;
+
+function getUserAgent(): string {
+  return process.env.GF_USERAGENT ?? DEFAULT_USER_AGENT;
+}
+
+function getSessionHeaders(authToken?: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    "Accept-Encoding": "gzip",
+    "User-Agent": getUserAgent(),
+    Connection: "keep-alive",
+    Accept: "*/*",
+    Origin: GOFILE_ORIGIN,
+    Referer: `${GOFILE_ORIGIN}/`,
+  };
+
+  if (authToken) {
+    headers.Cookie = `accountToken=${authToken}`;
+    headers.Authorization = `Bearer ${authToken}`;
+  }
+
+  return headers;
+}
+
+async function sha256Hex(input: string): Promise<string> {
+  const data = new TextEncoder().encode(input);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hashBuffer))
+    .map((b) => b.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+/**
+ * Matches gofile-downloader `generate_website_token`:
+ * sha256(f"{user_agent}::en-US::{account_token}::{time_slot}::{salt}")
+ * where time_slot = floor(unix_time / 14400).
+ */
+async function generateWebsiteToken(
+  userAgent: string,
+  accountToken: string,
+): Promise<string> {
+  const timeSlot = Math.floor(Math.floor(Date.now() / 1000) / 14400);
+  const raw = `${userAgent}::en-US::${accountToken}::${timeSlot}::${WEBSITE_TOKEN_SALT}`;
+  return sha256Hex(raw);
+}
+
+function resolveNamingCollision(
+  pathingCount: Map<string, number>,
+  parentPath: string,
+  childName: string,
+  isDir = false,
+): string {
+  const filepath = join(parentPath, childName).replace(/\\/g, "/");
+
+  const count = pathingCount.get(filepath) ?? 0;
+  pathingCount.set(filepath, count + 1);
+
+  if (count === 0) {
+    return filepath;
+  }
+
+  if (isDir) {
+    return `${filepath}(${count})`;
+  }
+
+  const dotIndex = filepath.lastIndexOf(".");
+  if (dotIndex === -1) {
+    return `${filepath}(${count})`;
+  }
+
+  return `${filepath.slice(0, dotIndex)}(${count})${filepath.slice(dotIndex)}`;
 }
 
 export default class GofileService extends DLService {
   private authToken: string | null = null;
-  private websiteToken: string | null = null;
 
   public constructor() {
-    super('Gofile', 7);
+    super("Gofile", 7);
   }
 
   scrapeDownloadLinks(
     url: string,
-    event: EventResponse<SearchResult>
+    _event: EventResponse<SearchResult>,
+    password?: string,
   ): Effect.Effect<
-    { name: string; url: string; headers: Record<string, string> }[],
+    GofileDownloadLink[],
     GofilePasswordRequiredError | GofileScrapeError
   > {
     return Effect.gen(function* (this: GofileService) {
-      // Extract content ID from URL
       const contentId = yield* this.extractContentId(url);
-      
-      // Get auth token and website token
-      yield* this.setAccountAccessToken();
-      
-      // Build file structure and collect download links
-      const files = yield* this.buildContentStructure(contentId, url);
-      
+      yield* this.setAccountAccessToken(process.env.GF_TOKEN);
+
+      const hashedPassword = password
+        ? yield* Effect.tryPromise({
+            try: () => sha256Hex(password),
+            catch: (error) => new GofileScrapeError({ url, error }),
+          })
+        : undefined;
+
+      const files: GofileDownloadLink[] = [];
+      const pathingCount = new Map<string, number>();
+
+      yield* this.buildContentTree(
+        "",
+        contentId,
+        contentId,
+        url,
+        files,
+        pathingCount,
+        hashedPassword,
+        true,
+      );
+
       return files;
     }.bind(this));
   }
@@ -57,114 +156,73 @@ export default class GofileService extends DLService {
   private extractContentId(url: string): Effect.Effect<string, GofileScrapeError> {
     return Effect.try({
       try: () => {
-        const urlParts = url.split('/');
-        if (urlParts.length < 2 || urlParts[urlParts.length - 2] !== 'd') {
+        const urlParts = url.split("/");
+        if (urlParts.length < 2 || urlParts[urlParts.length - 2] !== "d") {
           throw new Error(`The url probably doesn't have an id in it: ${url}`);
         }
-        return urlParts[urlParts.length - 1];
+        return urlParts[urlParts.length - 1]!;
       },
-      catch: (error) => new GofileScrapeError({ url, error })
+      catch: (error) => new GofileScrapeError({ url, error }),
     });
   }
 
-  /**
-   * Matches the reference implementation (see gofile-downloader generate_website_token):
-   * sha256(f"{user_agent}::en-US::{account_token}::{time_slot}::5d4f7g8sd45fsd").hexdigest()
-   *
-   * where time_slot = int(time()) // 14400.
-   */
-  private generateWebsiteToken(
-    userAgent: string,
-    accountToken: string,
-    errorUrl: string,
-  ): Effect.Effect<string, GofileScrapeError> {
-    return Effect.tryPromise({
-      try: async () => {
-        const timeSlot = Math.floor(Math.floor(Date.now() / 1000) / 14400);
-        const raw = `${userAgent}::en-US::${accountToken}::${timeSlot}::5d4f7g8sd45fsd`;
-
-        const encoder = new TextEncoder();
-        const data = encoder.encode(raw);
-        const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
-      },
-      catch: (error) => new GofileScrapeError({ url: errorUrl, error }),
-    });
+  private getDownloadHeaders(): Record<string, string> {
+    return this.authToken ? getSessionHeaders(this.authToken) : {};
   }
 
-  private setAccountAccessToken(token?: string): Effect.Effect<void, GofileScrapeError> {
+  private setAccountAccessToken(
+    token?: string,
+  ): Effect.Effect<void, GofileScrapeError> {
     return Effect.gen(function* (this: GofileService) {
       if (token) {
         this.authToken = token;
         return;
       }
 
-      // GoFile rate-limits token creation as well. Retry a few times on 429 / error-rateLimit.
-      const maxRetries = 6;
-      const baseDelayMs = 1000;
-      const accountsUrl = 'https://api.gofile.io/accounts';
-      const userAgent = 'Mozilla/5.0';
-      const websiteAccountToken = ''; // Python uses generate_website_token(user_agent, "") for account creation.
+      const accountsUrl = `${GOFILE_API}/accounts`;
+      const userAgent = getUserAgent();
 
-      for (let attempt = 0; attempt <= maxRetries; attempt++) {
-        const websiteToken = yield* this.generateWebsiteToken(
-          userAgent,
-          websiteAccountToken,
-          accountsUrl
-        );
+      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        const websiteToken = yield* Effect.tryPromise({
+          try: () => generateWebsiteToken(userAgent, ""),
+          catch: (error) => new GofileScrapeError({ url: accountsUrl, error }),
+        });
 
-        const response = yield* Effect.tryPromise({
-          try: () =>
-            fetch(accountsUrl, {
-              method: 'POST',
-              headers: {
-                Accept: '*/*',
-                'User-Agent': userAgent,
-                Connection: 'keep-alive',
-                'Accept-Encoding': 'gzip',
-                Origin: 'https://gofile.io',
-                Referer: 'https://gofile.io/',
-                'X-Website-Token': websiteToken,
-                'X-BL': 'en-US',
-              },
-            }),
-          catch: (error) =>
+        const response = yield* this.fetchWithRetries(accountsUrl, {
+          method: "POST",
+          headers: {
+            ...getSessionHeaders(),
+            "X-Website-Token": websiteToken,
+            "X-BL": "en-US",
+          },
+        });
+
+        if (!response) {
+          if (attempt < MAX_RETRIES) continue;
+          return yield* Effect.fail(
             new GofileScrapeError({
               url: accountsUrl,
-              error,
+              error: new Error("Account creation failed: no response"),
             }),
-        });
+          );
+        }
 
         const data = yield* Effect.tryPromise({
           try: () => response.json() as Promise<GofileApiResponse>,
           catch: (error) =>
-            new GofileScrapeError({
-              url: 'https://api.gofile.io/accounts',
-              error,
-            }),
+            new GofileScrapeError({ url: accountsUrl, error }),
         });
 
-        if (data.status === 'ok' && data.data.token) {
+        if (data.status === "ok" && data.data.token) {
           this.authToken = data.data.token;
           return;
         }
 
         const isRateLimited =
-          response.status === 429 || data.status === 'error-rateLimit';
+          response.status === 429 || data.status === "error-rateLimit";
 
-        if (isRateLimited && attempt < maxRetries) {
-          const retryAfterHeader = response.headers.get('retry-after');
-          const retryAfterSeconds = retryAfterHeader
-            ? Number.parseInt(retryAfterHeader, 10)
-            : NaN;
-
-          const backoffMs = Number.isFinite(retryAfterSeconds)
-            ? retryAfterSeconds * 1000
-            : Math.pow(2, attempt) * baseDelayMs;
-
-          const jitterMs = Math.floor(Math.random() * 250);
-          yield* Effect.sleep(backoffMs + jitterMs);
+        if (isRateLimited && attempt < MAX_RETRIES) {
+          yield* this.sleepForRetry(response, attempt);
           continue;
         }
 
@@ -172,126 +230,92 @@ export default class GofileService extends DLService {
           new GofileScrapeError({
             url: accountsUrl,
             error: new Error(
-              `Account creation failed (status=${data.status}, http=${response.status})`
+              `Account creation failed (status=${data.status}, http=${response.status})`,
             ),
-          })
+          }),
         );
       }
     }.bind(this));
   }
 
-  private fetchWebsiteToken(): Effect.Effect<void, GofileScrapeError> {
-    return Effect.gen(function* (this: GofileService) {
-      if (this.websiteToken) {
-        return;
+  private fetchWithRetries(
+    url: string,
+    init: RequestInit,
+  ): Effect.Effect<Response | null, never> {
+    return Effect.gen(function* () {
+      for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+        const response = yield* Effect.tryPromise({
+          try: () =>
+            fetch(url, {
+              ...init,
+              signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+            }),
+          catch: () => null,
+        }).pipe(Effect.catchAll(() => Effect.succeed(null)));
+
+        if (response) {
+          return response;
+        }
+
+        if (attempt < MAX_RETRIES) {
+          yield* Effect.sleep(Math.pow(2, attempt) * 1000);
+        }
       }
 
-      const response = yield* Effect.tryPromise({
-        try: () => fetch('https://gofile.io/dist/js/config.js', {
-          headers: {
-            'Accept': '*/*',
-            'User-Agent': 'Mozilla/5.0',
-          }
-        }),
-        catch: (error) => new GofileScrapeError({ url: 'https://gofile.io/dist/js/config.js', error })
-      });
-
-      const text = yield* Effect.tryPromise({
-        try: () => response.text(),
-        catch: (error) => new GofileScrapeError({ url: 'https://gofile.io/dist/js/config.js', error })
-      });
-
-      // Extract website token from: .wt = "TOKEN"
-      const match = text.match(/\.wt\s*=\s*["']([^"']+)["']/);
-      if (!match || !match[1]) {
-        return yield* Effect.fail(new GofileScrapeError({
-          url: 'https://gofile.io/dist/js/config.js',
-          error: new Error('Failed to extract website token from config.js')
-        }));
-      }
-
-      this.websiteToken = match[1];
-    }.bind(this));
+      return null;
+    });
   }
 
-  private buildContentStructure(
-    contentId: string, 
-    originalUrl: string, 
-    password?: string
-  ): Effect.Effect<
-    { name: string; url: string; headers: Record<string, string> }[],
-    GofilePasswordRequiredError | GofileScrapeError
-  > {
-    return Effect.gen(function* (this: GofileService) {
-      const files: { name: string; url: string; headers: Record<string, string> }[] = [];
-      
-      yield* this.collectFiles(contentId, originalUrl, files, password);
-      
-      return files;
-    }.bind(this));
+  private sleepForRetry(
+    response: Response,
+    attempt: number,
+  ): Effect.Effect<void, never> {
+    const retryAfterHeader = response.headers.get("retry-after");
+    const retryAfterSeconds = retryAfterHeader
+      ? Number.parseInt(retryAfterHeader, 10)
+      : NaN;
+    const backoffMs = Number.isFinite(retryAfterSeconds)
+      ? retryAfterSeconds * 1000
+      : Math.pow(2, attempt) * 1000;
+    const jitterMs = Math.floor(Math.random() * 250);
+    return Effect.sleep(backoffMs + jitterMs);
   }
 
-  private collectFiles(
+  private fetchContents(
     contentId: string,
     originalUrl: string,
-    files: { name: string; url: string; headers: Record<string, string> }[],
-    password?: string
-  ): Effect.Effect<void, GofilePasswordRequiredError | GofileScrapeError> {
+    hashedPassword?: string,
+  ): Effect.Effect<GofileApiResponse, GofilePasswordRequiredError | GofileScrapeError> {
     return Effect.gen(function* (this: GofileService) {
-      const userAgent = 'Mozilla/5.0';
-      let apiUrl = `https://api.gofile.io/contents/${contentId}?cache=true&sortField=createTime&sortDirection=1`;
-      
-      if (password) {
-        // Hash the password like in the Python version
-        const encoder = new TextEncoder();
-        const data = encoder.encode(password);
-        const hashBuffer = yield* Effect.tryPromise({
-          try: () => crypto.subtle.digest('SHA-256', data),
-          catch: (error) => new GofileScrapeError({ url: originalUrl, error })
-        });
-        const hashArray = Array.from(new Uint8Array(hashBuffer));
-        const hashedPassword = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+      let apiUrl = `${GOFILE_API}/contents/${contentId}?cache=true&sortField=createTime&sortDirection=1`;
+
+      if (hashedPassword) {
         apiUrl += `&password=${hashedPassword}`;
       }
 
-      const baseHeaders: Record<string, string> = {
-        'Accept': '*/*',
-        'User-Agent': userAgent,
-        'Connection': 'keep-alive',
-        'Accept-Encoding': 'gzip',
-        Origin: 'https://gofile.io',
-        Referer: 'https://gofile.io/',
-        'X-BL': 'en-US',
-      };
-
-      if (this.authToken) {
-        baseHeaders['Cookie'] = `accountToken=${this.authToken}`;
-        baseHeaders['Authorization'] = `Bearer ${this.authToken}`;
-      }
-
-      // GoFile rate-limits aggressively; retry a few times on 429 / error-rateLimit.
-      const maxRetries = 6;
+      const userAgent = getUserAgent();
+      const maxRateLimitRetries = 6;
       const baseDelayMs = 1000;
-      let data: GofileApiResponse | null = null;
 
-      for (let attempt = 0; attempt <= maxRetries; attempt++) {
-        const websiteToken = yield* this.generateWebsiteToken(
-          userAgent,
-          this.authToken ?? '',
-          originalUrl,
-        );
-
-        const headers: Record<string, string> = {
-          ...baseHeaders,
-          'X-Website-Token': websiteToken,
-        };
-
-        const response = yield* Effect.tryPromise({
-          try: () => fetch(apiUrl, { headers }),
-          catch: (error) => new GofileScrapeError({ url: originalUrl, error })
+      for (let attempt = 0; attempt <= maxRateLimitRetries; attempt++) {
+        const websiteToken = yield* Effect.tryPromise({
+          try: () => generateWebsiteToken(userAgent, this.authToken ?? ""),
+          catch: (error) => new GofileScrapeError({ url: originalUrl, error }),
         });
 
-        // Try to parse the response body for better diagnostics / retry decisions.
+        const response = yield* Effect.tryPromise({
+          try: () =>
+            fetch(apiUrl, {
+              headers: {
+                ...getSessionHeaders(this.authToken ?? undefined),
+                "X-Website-Token": websiteToken,
+                "X-BL": "en-US",
+              },
+              signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+            }),
+          catch: (error) => new GofileScrapeError({ url: originalUrl, error }),
+        });
+
         const parsedBody = yield* Effect.tryPromise({
           try: async () => {
             try {
@@ -300,94 +324,127 @@ export default class GofileService extends DLService {
               return null;
             }
           },
-          catch: (error) => new GofileScrapeError({ url: originalUrl, error })
-        }).pipe(
-          Effect.catchAll(() => Effect.succeed(null))
-        );
+          catch: (error) => new GofileScrapeError({ url: originalUrl, error }),
+        }).pipe(Effect.catchAll(() => Effect.succeed(null)));
+
+        if (parsedBody?.status === "ok") {
+          return parsedBody;
+        }
 
         const isRateLimited =
           response.status === 429 ||
-          parsedBody?.status === 'error-rateLimit';
+          parsedBody?.status === "error-rateLimit";
 
-        if (parsedBody?.status === 'ok') {
-          data = parsedBody;
-          break;
-        }
-
-        if (isRateLimited && attempt < maxRetries) {
-          const retryAfterHeader = response.headers.get('retry-after');
-          const retryAfterSeconds = retryAfterHeader
-            ? Number.parseInt(retryAfterHeader, 10)
-            : NaN;
-
-          const backoffMs = Number.isFinite(retryAfterSeconds)
-            ? retryAfterSeconds * 1000
-            : Math.pow(2, attempt) * baseDelayMs;
-
-          // Add a small jitter so concurrent tests don't synchronize.
-          const jitterMs = Math.floor(Math.random() * 250);
-          yield* Effect.sleep(backoffMs + jitterMs);
+        if (isRateLimited && attempt < maxRateLimitRetries) {
+          yield* this.sleepForRetry(response, attempt);
           continue;
         }
 
-        // Not rate-limited (or out of retries) => fail with the most helpful info we have.
         return yield* Effect.fail(
           new GofileScrapeError({
             url: originalUrl,
             error: new Error(
-              `Failed to fetch data from ${apiUrl} (status=${parsedBody?.status ?? response.status})`
-            )
-          })
+              `Failed to fetch data from ${apiUrl} (status=${parsedBody?.status ?? response.status})`,
+            ),
+          }),
         );
       }
 
-      if (!data) {
-        return yield* Effect.fail(
-          new GofileScrapeError({
-            url: originalUrl,
-            error: new Error(`No data received from ${apiUrl}`)
-          })
-        );
-      }
+      return yield* Effect.fail(
+        new GofileScrapeError({
+          url: originalUrl,
+          error: new Error(`No data received from ${apiUrl}`),
+        }),
+      );
+    }.bind(this));
+  }
 
-      // Check for password protection
-      if (data.data.password && data.data.passwordStatus !== 'passwordOk') {
+  private buildContentTree(
+    parentPath: string,
+    contentId: string,
+    rootContentId: string,
+    originalUrl: string,
+    files: GofileDownloadLink[],
+    pathingCount: Map<string, number>,
+    hashedPassword?: string,
+    isRootContent = false,
+  ): Effect.Effect<void, GofilePasswordRequiredError | GofileScrapeError> {
+    return Effect.gen(function* (this: GofileService) {
+      const data = yield* this.fetchContents(contentId, originalUrl, hashedPassword);
+
+      if (
+        data.data.password &&
+        data.data.passwordStatus &&
+        data.data.passwordStatus !== "passwordOk"
+      ) {
         return yield* Effect.fail(new GofilePasswordRequiredError({ url: originalUrl }));
       }
 
-      // If it's a file, add it to the collection
-      if (data.data.type !== 'folder' && data.data.link) {
+      if (data.data.type !== "folder") {
+        if (!data.data.link) {
+          return yield* Effect.fail(
+            new GofileScrapeError({
+              url: originalUrl,
+              error: new Error("File entry missing download link"),
+            }),
+          );
+        }
+
+        const name = resolveNamingCollision(
+          pathingCount,
+          parentPath,
+          data.data.name || "unknown",
+        );
+
         files.push({
-          name: data.data.name || 'unknown',
+          name: name.replace(/\\/g, "/"),
           url: data.data.link,
-          headers: this.authToken ? {
-            'Cookie': `accountToken=${this.authToken}`,
-            'Authorization': `Bearer ${this.authToken}`,
-            Origin: 'https://gofile.io',
-            Referer: 'https://gofile.io/',
-          } : {}
+          headers: this.getDownloadHeaders(),
         });
         return;
       }
 
-      // If it's a folder, process children
-      if (data.data.children) {
-        for (const child of Object.values(data.data.children)) {
-          if (child.type === 'folder') {
-            yield* this.collectFiles(child.id, originalUrl, files, password);
-          } else if (child.link) {
-            files.push({
-              name: child.name,
-              url: child.link,
-              headers: this.authToken ? {
-                'Cookie': `accountToken=${this.authToken}`,
-                'Authorization': `Bearer ${this.authToken}`,
-                Origin: 'https://gofile.io',
-                Referer: 'https://gofile.io/',
-                'OGI-Parallel-Limit': '1'
-              } : {}
-            });
-          }
+      let folderPath = parentPath;
+
+      if (!isRootContent) {
+        const folderName = data.data.name || "folder";
+        folderPath = resolveNamingCollision(
+          pathingCount,
+          parentPath,
+          folderName,
+          true,
+        );
+      }
+
+      const children = data.data.children;
+      if (!children) {
+        return;
+      }
+
+      for (const child of Object.values(children)) {
+        if (child.type === "folder") {
+          yield* this.buildContentTree(
+            folderPath,
+            child.id,
+            rootContentId,
+            originalUrl,
+            files,
+            pathingCount,
+            hashedPassword,
+            false,
+          );
+        } else if (child.link) {
+          const name = resolveNamingCollision(
+            pathingCount,
+            folderPath,
+            child.name,
+          );
+
+          files.push({
+            name: name.replace(/\\/g, "/"),
+            url: child.link,
+            headers: this.getDownloadHeaders(),
+          });
         }
       }
     }.bind(this));

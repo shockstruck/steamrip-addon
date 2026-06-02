@@ -5,22 +5,7 @@ import { FileSystemError, NetworkError, ScraperError } from './errors';
 import { headerManager } from './header-manager';
 import { fetchSteamripHtml } from './steamrip-fetch';
 import { join } from 'path';
-
-// Priority scraper ranking:
-// 0 - impossible to get it effectively
-// 10 - best chance to get it effectively
-
-export const SCRAPE_PRIORITY = {
-  // if scrape priority is 0, we will not choose it, as its quite literally impossible to get it effectively
-  'GOFILE': 6,
-  'Buzzheavier': 10,
-  'DataNodes': 0,
-  'MegaDB': 2,
-  '1FICHIER': 9,
-  'PixelDrain': 10,
-  'Unknown': 1,
-  'FILECRYPT': 8 // High priority since it's a link redirector that leads to actual download links
-}
+import type { DownloadLink } from './services/matcher';
 
 // 8 hours in milliseconds
 const SCRAPE_EXPIRY_MS = 8 * 60 * 60 * 1000;
@@ -244,41 +229,32 @@ export default class Scraper {
     );
   }
 
-  scrapeGameDownloads(url: string): Effect.Effect<{ service: string; url: string; }[], NetworkError | FileSystemError> {
+  scrapeGameDownloads(url: string): Effect.Effect<DownloadLink[], NetworkError | FileSystemError> {
     return Effect.gen(function*(this: Scraper) {
-      // Ensure scrapes directory exists
       yield* this.ensureScrapesDirectory();
-      
-      // Try to load cached result first
+
       const cachedResult = yield* this.loadScrapeResult(url);
       if (cachedResult) {
         return cachedResult;
       }
-      
+
       const html = yield* fetchSteamripHtml(url);
       const dom = new JSDOM(html);
       const document = dom.window.document;
-      const result: { service: string, url: string }[] = [];
+      const result: DownloadLink[] = [];
       document.querySelectorAll('p[style*="text-align: center"]').forEach(p => {
         const link = p.querySelector('a.shortc-button') as HTMLAnchorElement | null;
         const label = (p.querySelector('strong') || p.querySelector('span')) as HTMLElement | null;
 
-        if (link && label && label.textContent) {
+        if (link && label?.textContent) {
           const href = link.getAttribute('href');
-          let finalUrl = '';
-          if (href) {
-            finalUrl = href.startsWith('//') ? 'https:' + href : href;
-          }
-          result.push({
-            service: label.textContent.trim().toUpperCase(),
-            url: finalUrl
-          });
+          if (!href) return;
+          const finalUrl = href.startsWith('//') ? 'https:' + href : href;
+          if (finalUrl) result.push({ url: finalUrl });
         }
       });
-      
-      // Save the result to cache
+
       yield* this.saveScrapeResult(url, result);
-      
       return result;
     }.bind(this));
   }

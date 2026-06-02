@@ -1,109 +1,49 @@
 import { isFilecryptUrl } from "../filecrypt";
-import BuzzheavierService from "./BuzzHeavier";
+import { DLService } from "./BaseService";
+import BzzhrService from "./Bzzhr";
 import FichierService from "./1Fichier";
 import FileCryptService from "./FileCrypt";
 import GofileService from "./Gofile";
-import { Effect } from "effect";
-import { InvalidUrlError, NoServiceFoundError } from "../errors";
 import PixelDrainService from "./PixelDrain";
 import MegaDBService from "./MegaDB";
 import UnknownService from "./Unknown";
+import { Effect } from "effect";
+import { InvalidUrlError } from "../errors";
 
-export const getService = (name: string) => Effect.gen(function*() {
-  switch (name) {
-    case 'Buzzheavier':
-      return yield* Effect.succeed(new BuzzheavierService());
-    case 'Fichier':
-      return yield* Effect.succeed(new FichierService());
-    case 'FileCrypt':
-      return yield* Effect.succeed(new FileCryptService());
-    case 'Gofile':
-      return yield* Effect.succeed(new GofileService());
-    case 'PixelDrain':
-      return yield* Effect.succeed(new PixelDrainService());
-    case 'MegaDB':
-      return yield* Effect.succeed(new MegaDBService());
-    case 'Unknown':
-      return yield* Effect.succeed(new UnknownService());
-    default:
-      return yield* Effect.succeed(new UnknownService());
-  }
-});
+export type DownloadLink = { url: string };
 
-/**
- * Detects the appropriate service based on the URL
- */
-export const detectServiceFromUrl = (url: string) => Effect.gen(function* () {
-  const urlObj = yield* Effect.try({
-    try: () => new URL(url),
-    catch: () => new InvalidUrlError({ url })
-  });
-  const hostname = urlObj.hostname.toLowerCase();
+function matchService(url: URL): DLService {
+  const hostname = url.hostname.toLowerCase();
+  const href = url.toString();
 
-  // Check for FileCrypt
-  if (isFilecryptUrl(url)) {
-    return yield* Effect.succeed(new FileCryptService());
-  }
-
-  // Check for other services based on hostname
-  if (hostname.includes('buzzheavier')) {
-    return yield* Effect.succeed(new BuzzheavierService());
-  }
-
-  if (hostname.includes('1fichier')) {
-    return yield* Effect.succeed(new FichierService());
-  }
-
-  if (hostname.includes('gofile')) {
-    return yield* Effect.succeed(new GofileService());
-  }
-
-  if (hostname.includes('pixeldrain')) {
-    return yield* Effect.succeed(new PixelDrainService());
-  }
-
-  if (hostname.includes('megadb')) {
-    return yield* Effect.succeed(new MegaDBService());
-  }
-  
-  return yield* Effect.fail(new NoServiceFoundError());
-});
-
-/**
- * Gets the service name from a URL
- */
-export function getServiceNameFromUrl(url: string): string | null {
-  try {
-    const urlObj = new URL(url);
-    const hostname = urlObj.hostname.toLowerCase();
-
-    // Check for FileCrypt
-    if (isFilecryptUrl(url)) {
-      return 'FileCrypt';
-    }
-
-    // Check for other services based on hostname
-    if (hostname.includes('buzzheavier')) {
-      return 'Buzzheavier';
-    }
-
-    if (hostname.includes('1fichier')) {
-      return 'Fichier';
-    }
-
-    if (hostname.includes('gofile')) {
-      return 'Gofile';
-    }
-    if (hostname.includes('pixeldrain')) {
-      return 'PixelDrain';
-    }
-
-    if (hostname.includes('megadb')) {
-      return 'MegaDB';
-    }
-    
-    return 'Unknown';
-  } catch {
-    return null;
-  }
+  if (isFilecryptUrl(href)) return new FileCryptService();
+  if (hostname.includes("bzzhr")) return new BzzhrService();
+  if (hostname.includes("1fichier")) return new FichierService();
+  if (hostname.includes("gofile")) return new GofileService();
+  if (hostname.includes("pixeldrain")) return new PixelDrainService();
+  if (hostname.includes("megadb")) return new MegaDBService();
+  if (hostname.includes("datanodes")) return new DLService("DataNodes", 0);
+  return new UnknownService();
 }
+
+export const resolveServiceFromUrl = (url: string) =>
+  Effect.gen(function* () {
+    const urlObj = yield* Effect.try({
+      try: () => new URL(url),
+      catch: () => new InvalidUrlError({ url }),
+    });
+    return matchService(urlObj);
+  });
+
+export const rankDownloadLinks = (links: DownloadLink[]) =>
+  Effect.gen(function* () {
+    const ranked: { service: DLService; url: string }[] = [];
+    for (const link of links) {
+      const service = yield* resolveServiceFromUrl(link.url);
+      if (service.priority > 0) {
+        ranked.push({ service, url: link.url });
+      }
+    }
+    ranked.sort((a, b) => b.service.priority - a.service.priority);
+    return ranked;
+  });

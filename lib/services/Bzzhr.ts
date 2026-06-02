@@ -9,9 +9,9 @@ import { BuzzHeavierError, DownloadCatcherError } from "../errors";
 import type { EventResponse, SearchResult } from "ogi-addon";
 import type { Browser, Page } from "puppeteer";
 
-export default class BuzzheavierService extends DLService {
+export default class BzzhrService extends DLService {
   public constructor() {
-    super("Buzzheavier", 8); // Buzzheavier is super weird with downloads at times, so low priority.
+    super("BZZHR", 8); // Bzzhr is super weird with downloads at times, so low priority.
   }
 
   scrapeDownloadLinks(
@@ -29,7 +29,7 @@ export default class BuzzheavierService extends DLService {
         return { browser, page } as { browser: Browser; page: Page };
       },
       catch: (error) => {
-        console.error("[BuzzHeavier] Error launching browser:", error);
+        console.error("[Bzzhr] Error launching browser:", error);
         return new BuzzHeavierError({ url, error });
       },
     });
@@ -38,7 +38,7 @@ export default class BuzzheavierService extends DLService {
       acquireConn,
       ({ browser, page }) =>
         Effect.gen(
-          function* (this: BuzzheavierService) {
+          function* (this: BzzhrService) {
             yield* Effect.tryPromise({
               try: () => page.goto(url),
               catch: (error) => new BuzzHeavierError({ url, error }),
