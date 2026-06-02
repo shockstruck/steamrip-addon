@@ -113,7 +113,7 @@ export default class GofileService extends DLService {
   private authToken: string | null = null;
 
   public constructor() {
-    super("Gofile", 7);
+    super("Gofile", 10);
   }
 
   scrapeDownloadLinks(
