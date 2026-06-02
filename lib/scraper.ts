@@ -1,9 +1,9 @@
 import { JSDOM } from 'jsdom';
-import axios from 'axios';
 import * as fs from 'fs/promises';
 import { Effect } from 'effect';
 import { FileSystemError, NetworkError, ScraperError } from './errors';
 import { headerManager } from './header-manager';
+import { fetchSteamripHtml } from './steamrip-fetch';
 import { join } from 'path';
 
 // Priority scraper ranking:
@@ -213,35 +213,8 @@ export default class Scraper {
 
   scrapeAllLinks(): Effect.Effect<{ name: string | undefined; url: string; }[], NetworkError | FileSystemError> {
     return Effect.gen(function*() {
-      // Load headers if available
-      yield* headerManager.loadHeaders();
-      
-      // Check if we have valid Cloudflare headers
-      if (headerManager.requiresCloudflare && !headerManager.hasValidCloudflareHeaders()) {
-        throw new Error('No valid Cloudflare headers found. Please solve Cloudflare protection first.');
-      }
-      
-      const headers = headerManager.getHeaderObject();
-      
-      // Add some additional headers that might help with Cloudflare
-      headers['DNT'] = '1';
-      headers['Connection'] = 'keep-alive';
-      
-      const response = yield* Effect.tryPromise({
-        try: () => axios.get('https://steamrip.com/games-list-page/', { 
-          headers,
-          timeout: 30000,
-          maxRedirects: 5
-        }),
-        catch: (error) => {
-          console.error('Request failed:', error);
-          return new NetworkError({ url: 'https://steamrip.com/games-list-page/', error })
-        }
-      });
-      
-      console.log('Response status:', response.status);
-      
-      const dom = new JSDOM(response.data);
+      const html = yield* fetchSteamripHtml('https://steamrip.com/games-list-page/');
+      const dom = new JSDOM(html);
       const document = dom.window.document;
 
       const gameLinks = Array.from(document.querySelectorAll('.az-list-item a'));
@@ -264,6 +237,13 @@ export default class Scraper {
     }.bind(this));
   }
 
+  processLocalsIfPresent(): Effect.Effect<boolean, never> {
+    return this.processLocals().pipe(
+      Effect.as(true),
+      Effect.catchAll(() => Effect.succeed(false))
+    );
+  }
+
   scrapeGameDownloads(url: string): Effect.Effect<{ service: string; url: string; }[], NetworkError | FileSystemError> {
     return Effect.gen(function*(this: Scraper) {
       // Ensure scrapes directory exists
@@ -275,35 +255,8 @@ export default class Scraper {
         return cachedResult;
       }
       
-      // Load headers if available
-      yield* headerManager.loadHeaders();
-      
-      // Check if we have valid Cloudflare headers
-      if (headerManager.requiresCloudflare && !headerManager.hasValidCloudflareHeaders()) {
-        throw new Error('No valid Cloudflare headers found. Please solve Cloudflare protection first.');
-      }
-      
-      const headers = headerManager.getHeaderObject();
-      
-      // Add some additional headers that might help with Cloudflare
-      headers['DNT'] = '1';
-      headers['Connection'] = 'keep-alive';
-      
-      const response = yield* Effect.tryPromise({
-        try: () => axios.get(url, { 
-          headers,
-          timeout: 30000,
-          maxRedirects: 5
-        }),
-        catch: (error) => {
-          console.error('Game download request failed:', error);
-          return new NetworkError({ url, error })
-        }
-      });
-      
-      console.log('Game download response status:', response.status);
-      
-      const dom = new JSDOM(response.data);
+      const html = yield* fetchSteamripHtml(url);
+      const dom = new JSDOM(html);
       const document = dom.window.document;
       const result: { service: string, url: string }[] = [];
       document.querySelectorAll('p[style*="text-align: center"]').forEach(p => {

@@ -1,7 +1,8 @@
 import { Data, Effect, pipe } from "effect";
 import type OGIAddon from "ogi-addon";
 import { headerManager, convertPuppeteerCookies } from "./header-manager";
-import axios, { type AxiosResponse } from "axios";
+import { isCloudflareChallenge } from "./steamrip-fetch";
+import axios from "axios";
 import type { Page } from "puppeteer";
 import type { PageWithCursor } from "puppeteer-real-browser";
 import { connectRealBrowser, navigateBrowserPage, PUPPETEER_OPTIONS } from "./services/BaseService";
@@ -28,41 +29,52 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
     return cloudflareCookies.length > 0;
   };
   
+  const steamripHeadersAreValid = (status: number, headers: Record<string, unknown>, body: string) =>
+    status >= 200 &&
+    status < 300 &&
+    !isCloudflareChallenge(status, headers, body);
+
   // If we already have valid Cloudflare headers, test them first
   if (hasValidCloudflareHeaders()) {
-    // Test if existing headers are still valid
     const testResponse = yield* Effect.tryPromise({
-      try: () => axios.get(url, { 
+      try: () => axios.get(url, {
         headers: headerManager.getHeaderObject(),
-        timeout: 10000,
+        timeout: 10_000,
+        validateStatus: () => true,
+        responseType: "text",
       }),
-      catch: () => undefined
+      catch: () => undefined,
     }).pipe(Effect.catchAll((err) => {
       console.log('Error:', err);
       return Effect.succeed(undefined);
     }));
 
-    if (!testResponse) {
-      console.log('Test request failed');
-    } else if (testResponse.status === 200 && !(testResponse.data as string).includes('Cloudflare')) {
-      return headerManager.getHeaders(); // Return the valid headers instead of null
+    if (testResponse && steamripHeadersAreValid(testResponse.status, testResponse.headers, testResponse.data)) {
+      return headerManager.getHeaders();
+    }
+
+    if (testResponse && isCloudflareChallenge(testResponse.status, testResponse.headers, testResponse.data)) {
+      console.log('Stored Cloudflare headers are stale (blocked by challenge), clearing and re-solving');
+      yield* headerManager.clearHeaders();
     }
   }
 
   // check using axios to see if we can just get the page
   console.log('Checking if we can just get the page');
   const testResponse = yield* Effect.tryPromise(async () => {
-    const response = await axios.get(url, { 
+    const response = await axios.get(url, {
       headers: headerManager.getHeaderObject(),
-      timeout: 10000,
+      timeout: 10_000,
+      validateStatus: () => true,
+      responseType: "text",
     });
-    return response.status === 200 && !(response.data as string).includes('Cloudflare');
+    return response;
   }).pipe(Effect.catchAll((err) => {
     console.log('Error:', err);
-    return Effect.succeed(false);
+    return Effect.succeed(undefined);
   }));
 
-  if (testResponse) {
+  if (testResponse && steamripHeadersAreValid(testResponse.status, testResponse.headers, testResponse.data)) {
     headerManager.requiresCloudflare = false;
     return headerManager.getHeaders();
   }

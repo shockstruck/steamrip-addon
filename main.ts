@@ -14,7 +14,8 @@ import axios from "axios";
 import { Stream } from "stream";
 import { cloudflareSolve, CloudflareTestError } from "./lib/cloudflare";
 import { headerManager } from "./lib/header-manager";
-import { connectRealBrowser, PUPPETEER_OPTIONS } from "./lib/services/BaseService";
+import { fetchSteamripHtml } from "./lib/steamrip-fetch";
+import { PUPPETEER_OPTIONS } from "./lib/services/BaseService";
 import { applySetupOverrides } from "./lib/app-overrides";
 
 const baseAddon = new OGIAddon({
@@ -181,6 +182,22 @@ const program = Effect.gen(function* () {
     yield* Effect.sync(() => task.complete());
   }).pipe(Effect.runPromise));
 
+  const refreshSteamripCatalog = Effect.fn('refreshSteamripCatalog')(function*(force: boolean = false) {
+    yield* headerManager.loadHeaders();
+    yield* pipe(
+      cloudflareSolve('https://steamrip.com', addon),
+      Effect.catchAll((error) => {
+        console.error('Background Cloudflare solve failed:', error);
+        return Effect.succeed(undefined);
+      })
+    );
+
+    yield* scraper.cleanupExpiredScrapes();
+    yield* scraper.upgradeLocals(force);
+    yield* scraper.processLocals();
+    yield* Effect.sync(() => search.addItems(scraper.catalog.games));
+  });
+
   addon.on('connect', (event) => {
     const connectEffect = Effect.fn('connectEffect')(function*() {
       const task = yield* Effect.tryPromise({
@@ -219,93 +236,42 @@ const program = Effect.gen(function* () {
         }));
         console.log('CHROME_PATH set to', process.env.CHROME_PATH);
       }
-      // check if chrome is installed on the device, and we can spawn a puppeteer-real-browser process
-      // Set protocol timeout via environment variable to avoid Runtime.callFunctionOn timeout
+      // Avoid launching Chrome during connect. Cloudflare/browser work is performed by
+      // the background catalog refresh or by the first uncached search instead.
       process.env.PUPPETEER_PROTOCOL_TIMEOUT = String(PUPPETEER_OPTIONS.protocolTimeout || 180000);
-      const chromeInstalled = yield* Effect.tryPromise(() => connectRealBrowser({ headless: true, disableXvfb: true })).pipe(Effect.catchAll((err) => {
-        console.log('Error:', err);
-        return Effect.succeed(undefined);
-      }));
-      if (!chromeInstalled) {
-        yield* Effect.sync(() => task.log('Chrome/Chromium is not installed on the device. Please install it and try again.'));
-        yield* Effect.sync(() => task.complete());
-        yield* Effect.sync(() => addon.notify({
-          message: 'Steamrip requires Chrome/Chromium to be installed on the device for accessing Steamrip.com',
-          id: 'str-chrome-not-installed',
-          type: 'error',
-        }));
-
-        yield* Effect.promise(async () => await event.askForInput('(1/3) Chrome/Chromium is not installed', 'Steamrip Addon requires Chrome/Chromium to be installed on the device for accessing Steamrip.com', new ConfigurationBuilder()));
-        if (process.platform === 'linux') {
-          yield* Effect.promise(async () => await event.askForInput('(2/3) Chrome/Chromium is not installed', 'Because you are on Linux, download the Flatpak version of Chromium from Discover or the CLI using flatpak install flathub org.chromium.Chromium', new ConfigurationBuilder()));
-          yield* Effect.promise(async () => await event.askForInput('(3/3) Chrome/Chromium is not installed', 'Once you have installed it, please restart the addon server and try again.', new ConfigurationBuilder()));
-        }
-        else {
-          yield* Effect.promise(async () => await event.askForInput('(2/3) Chrome/Chromium is not installed', 'Because you are on Windows, download the Chrome browser from the official website and install it.', new ConfigurationBuilder()));
-          yield* Effect.promise(async () => await event.askForInput('(3/3) Chrome/Chromium is not installed', 'Once you have installed it, please restart the addon server and try again.', new ConfigurationBuilder()));
-        }
-        return;
-      }
-      yield* Effect.sync(() => task.log('Chrome is installed on the device.'));
-      console.log('Chrome is installed on the device.');
-      yield* Effect.promise(async () => await chromeInstalled.browser.close());
-
-
-
-      yield* Effect.sync(() => task.log('Checking Cloudflare protection...'));
-      
-      // Check if user wants to clear headers
-      // if (addon.config.getBooleanValue('clearCloudflareCookies') ?? false) {
-      //   yield* Effect.sync(() => task.log('Clearing Cloudflare headers as requested...'));
-      //   yield* headerManager.clearHeaders();
-      // }
-      
-      // Load existing headers first
-      yield* headerManager.loadHeaders();
-      
-      // Check if we need to solve Cloudflare
-      const cloudflareResult = yield* pipe(
-        cloudflareSolve('https://steamrip.com', addon),
-        Effect.catchAll((er) => {
-          console.error('Error solving Cloudflare:', er);
-          return Effect.succeed(undefined);
-        })
-      );
-      
-      if (cloudflareResult) {
-        yield* Effect.sync(() => task.log('Cloudflare headers obtained and stored.'));
+      yield* Effect.sync(() => task.log('Loading cached Steamrip catalog...'));
+      const loadedCachedCatalog = yield* scraper.processLocalsIfPresent();
+      if (loadedCachedCatalog) {
+        yield* Effect.sync(() => search.addItems(scraper.catalog.games));
+        yield* Effect.sync(() => task.log(`Loaded ${scraper.catalog.games.length} cached Steamrip games.`));
       } else {
-        yield* Effect.sync(() => task.log('No Cloudflare protection detected.'));
+        yield* Effect.sync(() => task.log('No cached Steamrip catalog found; first search may take longer.'));
       }
 
-      if (cloudflareResult === undefined) {
-        yield* Effect.sync(() => task.log('Seems like we cannot access steamrip.com. Please check your internet connection and try again.'));
-        yield* Effect.sync(() => task.complete());
-        addon.notify({
-          message: 'Seems like we cannot access steamrip.com. Please check your internet connection and try again.',
-          id: 'steamrip-cloudflare-error',
-          type: 'error',
-        });
-        return;
-      }
-
-      yield* Effect.sync(() => task.log('Cleaning up expired scrapes...'));
-      yield* scraper.cleanupExpiredScrapes();
-      
-      // Log scrape statistics
       const stats = yield* scraper.getScrapeStats();
       yield* Effect.sync(() => task.log(`Scrape cache: ${stats.valid} valid, ${stats.expired} expired, ${stats.total} total files`));
-      
-      yield* Effect.sync(() => task.log('Implementing local catalog...'));
-      yield* scraper.upgradeLocals();
-      yield* Effect.sync(() => task.log('Processing local catalog...'));
-      yield* scraper.processLocals();
-      yield* Effect.sync(() => search.addItems(scraper.catalog.games));
-      yield* Effect.sync(() => addon.notify({
-        message: 'Steamrip Cloudflare Solved.',
-        id: 'steamrip-cloudflare-solved',
-        type: 'success',
-      }));
+
+      yield* Effect.sync(() => task.log('Starting Steamrip catalog refresh in the background...'));
+      yield* Effect.sync(() => {
+        pipe(
+          refreshSteamripCatalog(false),
+          Effect.tap(() => Effect.sync(() => addon.notify({
+            message: 'Steamrip catalog refreshed.',
+            id: 'steamrip-catalog-refreshed',
+            type: 'success',
+          }))),
+          Effect.catchAll((error) => Effect.sync(() => {
+            console.error('Background Steamrip catalog refresh failed:', error);
+            addon.notify({
+              message: 'Steamrip catalog refresh failed. Searches will use cached data if available.',
+              id: 'steamrip-catalog-refresh-failed',
+              type: 'warning',
+            });
+          })),
+          Effect.runFork
+        );
+      });
+
       yield* Effect.sync(() => task.complete());
     });
 
@@ -341,6 +307,12 @@ const program = Effect.gen(function* () {
       if (!steamResult) {
         return yield* Effect.fail(new SteamSearchError({ query: String(appID) }));
       }
+
+      if (scraper.catalog.games.length === 0) {
+        console.log('Steamrip catalog is empty, refreshing before search...');
+        yield* refreshSteamripCatalog(false);
+      }
+
       // Find the game with the highest name similarity to the Steam result
       let bestMatch: { name: string; url: string } | undefined;
       let bestScore = 0;
@@ -923,8 +895,8 @@ const program = Effect.gen(function* () {
       // write to the game install cwd a "steamrip-info.json"
 
       const { title }: { title: string | undefined } = yield* (manifest ? pipe(
-        Effect.tryPromise(async () => await axios.get(manifest.url as string, { headers: scraper.getHeaderObject()})),
-        Effect.andThen(response => new JSDOM(response.data)),
+        fetchSteamripHtml(manifest.url as string),
+        Effect.andThen(html => new JSDOM(html)),
         Effect.andThen(dom => ({ title: dom.window.document.querySelector('.post-title')?.textContent?.trim() })),
         Effect.catchAll(error => {
           console.error('Failed to get app details', manifest?.url, error);
