@@ -9,7 +9,7 @@
         "axios": "^1.11.0",
         "effect": "^3.17.13",
         "jsdom": "^26.1.0",
-        "ogi-addon": "^2.4.0",
+        "ogi-addon": "4.1.0",
         "puppeteer": "^24.19.0",
         "puppeteer-extra": "^3.3.6",
         "puppeteer-extra-plugin-adblocker": "^2.13.6",
@@ -79,6 +79,8 @@
     "@msgpackr-extract/msgpackr-extract-linux-x64": ["@msgpackr-extract/msgpackr-extract-linux-x64@3.0.3", "", { "os": "linux", "cpu": "x64" }, "sha512-cvwNfbP07pKUfq1uH+S6KJ7dT9K8WOE4ZiAcsrSes+UY55E/0jLYc+vq+DO7jlmqRb5zAggExKm0H7O/CBaesg=="],
 
     "@msgpackr-extract/msgpackr-extract-win32-x64": ["@msgpackr-extract/msgpackr-extract-win32-x64@3.0.3", "", { "os": "win32", "cpu": "x64" }, "sha512-x0fWaQtYp4E6sktbsdAqnehxDgEc/VwM7uLsRCYWaiGu0ykYdZPiS8zCWdnjHwyiumousxfBm4SO31eXqwEZhQ=="],
+
+    "@ogi-sdk/connect": ["@ogi-sdk/connect@1.0.1", "", { "peerDependencies": { "typescript": "^5" } }, "sha512-VGcdKZJ8FdCafpdqPrGEy6/xKoYZGD0OhAqIczLCeUcdJu9EnpMOZ7yZi75ynwJIs90sFZnMENGJ7jm0tWy63g=="],
 
     "@opentelemetry/semantic-conventions": ["@opentelemetry/semantic-conventions@1.34.0", "", {}, "sha512-aKcOkyrorBGlajjRdVoJWHTxfxO1vCNHLJVlSDaRHDIdjU+pX8IYQPvPDkYiujKLbRnWU+1TBwEt0QRgSm4SGA=="],
 
@@ -442,7 +444,7 @@
 
     "nwsapi": ["nwsapi@2.2.20", "", {}, "sha512-/ieB+mDe4MrrKMT8z+mQL8klXydZWGR5Dowt4RAGKbJ3kIGEx3X4ljUo+6V73IXtUPWgfOlU5B9MlGxFO5T+cA=="],
 
-    "ogi-addon": ["ogi-addon@2.4.0", "", { "dependencies": { "fuse.js": "^7.1.0", "ws": "^8.4.0", "zod": "^3.23.8" } }, "sha512-pevYUDZZb72IN+VRgycc7NJiEVVLmGFuIqPKnjFwyDfksTV632pnCfjU/WXpoYBknrgkfrDdPjQXwPol2xcXzA=="],
+    "ogi-addon": ["ogi-addon@4.1.0", "", { "dependencies": { "@ogi-sdk/connect": "^1.0.1", "fuse.js": "^7.1.0", "zod": "^3.23.8" } }, "sha512-qPyKZ7GirTPgXSsPUwNRdgfc2+gWNHfP7lbpApPJKXInvkBmSS2PvLt+f3rMBUN/FjVtZXWhLgQj36JIflrO3A=="],
 
     "once": ["once@1.4.0", "", { "dependencies": { "wrappy": "1" } }, "sha512-lNaJgI+2Q5URQBkccEKHTQOPaXdUxnZZElQTZY0MFUAuaEqe1E+Nyvgdz/aIyNi6Z9MzO5dv1H8n58/GELp3+w=="],
 
@@ -621,8 +623,6 @@
     "node-fetch/whatwg-url": ["whatwg-url@5.0.0", "", { "dependencies": { "tr46": "~0.0.3", "webidl-conversions": "^3.0.0" } }, "sha512-saE57nupxk6v3HY35+jzBwYa0rKSy0XR8JSxZPwgLr7ys0IBzhGviA1/TUGJLmSVqs8pb9AnvICXEuOHLprYTw=="],
 
     "node-gyp-build-optional-packages/detect-libc": ["detect-libc@2.0.4", "", {}, "sha512-3UDv+G9CsCKO1WKMGw9fwq/SWJYbI0c5Y7LU1AXYoDdbhE2AHQ6N6Nb34sG8Fj7T5APy8qXDCKuuIHd1BR0tVA=="],
-
-    "ogi-addon/ws": ["ws@8.18.3", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-PEIGCY5tSlUt50cqyMXfCzX+oOPqN0vuGqWzbcJ2xvnkzkq46oOpz7dQaTDBdfICb4N14+GARUDw2XV2N4tvzg=="],
 
     "proxy-agent/lru-cache": ["lru-cache@7.18.3", "", {}, "sha512-jumlc0BIUrS3qJGgIkWZsyfAM7NCWiBcCDhnd+3NNM5KbBmLTgHVfWBcg6W+rLUsIpzpERPsvwUP7CckAQSOoA=="],
 
