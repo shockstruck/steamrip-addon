@@ -443,7 +443,10 @@ export default class GofileService extends DLService {
           files.push({
             name: name.replace(/\\/g, "/"),
             url: child.link,
-            headers: this.getDownloadHeaders(),
+            headers: {
+              ...this.getDownloadHeaders(),
+              'OGI-Parallel-Limit': '1',
+            },
           });
         }
       }
