@@ -6,7 +6,7 @@ import { ConfigurationBuilder, type EventResponse, type SearchResult } from "ogi
 
 export default class FileCryptService extends DLService {
   public constructor() {
-    super('FileCrypt', 6); // low priority since it's a link redirector
+    super('FileCrypt', 5); // redirector — resolved target host sets final priority
   }
 
   isCaptchaBased(): boolean {

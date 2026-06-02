@@ -23,7 +23,7 @@ async function closePopupPages(browser: any, mainPage: any): Promise<void> {
 
 export default class MegaDBService extends DLService {
   public constructor() {
-    super('MegaDB', 5); // Medium priority
+    super('MegaDB', 4);
   }
 
   isCaptchaBased(): boolean {

@@ -11,7 +11,7 @@ import type { Browser, Page } from "puppeteer";
 
 export default class BzzhrService extends DLService {
   public constructor() {
-    super("BZZHR", 1); // Last resort — unreliable downloads compared to Gofile.
+    super("BZZHR", 1); // Last resort only — prefer Gofile and other hosts first.
   }
 
   scrapeDownloadLinks(

@@ -31,7 +31,7 @@ async function closePopupPages(browser: any, mainPage: any): Promise<void> {
 
 export default class UnknownService extends DLService {
   public constructor() {
-    super('Unknown', 1); // Low priority since it's a fallback
+    super('Unknown', 2); // Fallback — still above BZZHR
   }
 
   isCaptchaBased(): boolean {

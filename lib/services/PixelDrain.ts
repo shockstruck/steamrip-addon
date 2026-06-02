@@ -6,7 +6,7 @@ import type { Browser, Page } from "puppeteer";
 
 export default class PixelDrainService extends DLService {
   public constructor() {
-    super('PixelDrain', 8);
+    super('PixelDrain', 6);
   }
 
   scrapeDownloadLinks(url: string, event: EventResponse<SearchResult>): Effect.Effect<{ name: string; url: string; headers: Record<string, string> }[], PixelDrainError | DownloadCatcherError> {

@@ -44,6 +44,11 @@ export const rankDownloadLinks = (links: DownloadLink[]) =>
         ranked.push({ service, url: link.url });
       }
     }
-    ranked.sort((a, b) => b.service.priority - a.service.priority);
+    ranked.sort((a, b) => {
+      const aIsGofile = a.service.name === "Gofile";
+      const bIsGofile = b.service.name === "Gofile";
+      if (aIsGofile !== bIsGofile) return aIsGofile ? -1 : 1;
+      return b.service.priority - a.service.priority;
+    });
     return ranked;
   });

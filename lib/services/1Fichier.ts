@@ -6,7 +6,7 @@ import type { Browser, Page } from "puppeteer";
 
 export default class FichierService extends DLService {
   public constructor() {
-    super('Fichier', 9);
+    super('Fichier', 7);
   }
 
   scrapeDownloadLinks(url: string, event: EventResponse<SearchResult>): Effect.Effect<{ name: string; url: string; headers: Record<string, string> }[], FichierError> {
