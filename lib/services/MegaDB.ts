@@ -87,8 +87,7 @@ export default class MegaDBService extends DLService {
           );
 
           let downloadUrl: string | undefined;
-          let attempts = 0;
-          const maxAttempts = 30; // Wait up to 30 attempts (about 30 seconds)
+          const downloadDetectionTimeoutMs = 10 * 60 * 1000; // Wait up to 10 minutes for the user to trigger the download
 
           // Look for common download button selectors on MegaDB
           const downloadButtonSelectors = [
@@ -147,10 +146,10 @@ export default class MegaDBService extends DLService {
                     });
                 });
 
-                // Wait for user to trigger download (up to 60 seconds)
+                // Wait for user to trigger download (up to 10 minutes)
                 setTimeout(() => {
                   resume(Effect.succeed(undefined));
-                }, 60000);
+                }, downloadDetectionTimeoutMs);
               } catch (error) {
                 resume(Effect.fail(new DownloadCatcherError({ error })));
               }
