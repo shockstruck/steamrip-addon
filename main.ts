@@ -1,14 +1,36 @@
-import { JSDOM } from 'jsdom';
-import OGIAddon, { ConfigurationBuilder, EventResponse, SearchTool, type SetupEventResponse, type SearchResult } from "ogi-addon";
+import { JSDOM } from "jsdom";
+import OGIAddon, {
+  ConfigurationBuilder,
+  EventResponse,
+  SearchTool,
+  type SetupEventResponse,
+  type SearchResult,
+} from "ogi-addon";
 import Scraper from "./lib/scraper";
-import { rankDownloadLinks, resolveServiceFromUrl, type DownloadLink } from "./lib/services/matcher";
+import {
+  rankDownloadLinks,
+  resolveServiceFromUrl,
+  type DownloadLink,
+} from "./lib/services/matcher";
 import FileCryptService from "./lib/services/FileCrypt";
 import { Context, Effect, Layer, Match, pipe } from "effect";
 import { BunRuntime } from "@effect/platform-bun";
-import { CommonRedistError, FileCryptError, InputError, NoDownloadFoundError, NoFileFoundError, NoGameFoundError, NoServiceFoundError, NotOnlineError, RarExtractionError, ScrapeGameDownloadsError, SteamSearchError } from "./lib/errors";
+import {
+  CommonRedistError,
+  FileCryptError,
+  InputError,
+  NoDownloadFoundError,
+  NoFileFoundError,
+  NoGameFoundError,
+  NoServiceFoundError,
+  NotOnlineError,
+  RarExtractionError,
+  ScrapeGameDownloadsError,
+  SteamSearchError,
+} from "./lib/errors";
 import { dirname, join, relative } from "path";
 import { spawnSync, execSync, spawn } from "child_process";
-import * as fs from 'fs/promises';
+import * as fs from "fs/promises";
 import { existsSync, type Stats } from "fs";
 import axios from "axios";
 import { Stream } from "stream";
@@ -19,39 +41,46 @@ import { PUPPETEER_OPTIONS } from "./lib/services/BaseService";
 import { applySetupOverrides } from "./lib/app-overrides";
 
 const baseAddon = new OGIAddon({
-  name: 'Steamrip Tool',
-  version: '1.0.0',
-  id: 'steamrip-addon',
-  author: 'fat-addons',
-  description: 'An addon to scrape steamrip and provide direct download links.',
-  repository: 'https://gitlab.com/fat-addons/steamrip-addon',
-  storefronts: [ 'steam' ]
-
+  name: "Steamrip Tool",
+  version: "1.0.0",
+  id: "steamrip-addon",
+  author: "fat-addons",
+  description: "An addon to scrape steamrip and provide direct download links.",
+  repository: "https://gitlab.com/fat-addons/steamrip-addon",
+  storefronts: ["steam"],
 });
 
-export class AddonService extends Context.Tag('AddonService')<AddonService, {
-  addon: OGIAddon,
-  stringSimilarity: (a: string, b: string) => number
-}>() {}
+export class AddonService extends Context.Tag("AddonService")<
+  AddonService,
+  {
+    addon: OGIAddon;
+    stringSimilarity: (a: string, b: string) => number;
+  }
+>() {}
 
 const addonService = Layer.succeed(AddonService, {
   addon: baseAddon,
   stringSimilarity: (a: string, b: string): number => {
     // Normalize and clean the strings
     const normalize = (str: string): string => {
-      return str
-        .toLowerCase()
-        // Remove common download-related suffixes
-        .replace(/\s+(free\s+)?download.*$/i, '')
-        // Remove version patterns like (v1.2.3), [v1.2.3], etc.
-        .replace(/[\(\[\{]v?[\d\.]+[\)\]\}]/gi, '')
-        // Remove year patterns like (2023), [2024], etc.
-        .replace(/[\(\[\{]\d{4}[\)\]\}]/g, '')
-        // Remove edition suffixes but keep them for partial matching
-        .replace(/\s+(premium|deluxe|gold|ultimate|complete|goty|game\s+of\s+the\s+year|enhanced|definitive|remastered|directors?\s+cut)\s+(edition)?/gi, '')
-        // Clean up extra whitespace
-        .replace(/\s+/g, ' ')
-        .trim();
+      return (
+        str
+          .toLowerCase()
+          // Remove common download-related suffixes
+          .replace(/\s+(free\s+)?download.*$/i, "")
+          // Remove version patterns like (v1.2.3), [v1.2.3], etc.
+          .replace(/[\(\[\{]v?[\d\.]+[\)\]\}]/gi, "")
+          // Remove year patterns like (2023), [2024], etc.
+          .replace(/[\(\[\{]\d{4}[\)\]\}]/g, "")
+          // Remove edition suffixes but keep them for partial matching
+          .replace(
+            /\s+(premium|deluxe|gold|ultimate|complete|goty|game\s+of\s+the\s+year|enhanced|definitive|remastered|directors?\s+cut)\s+(edition)?/gi,
+            "",
+          )
+          // Clean up extra whitespace
+          .replace(/\s+/g, " ")
+          .trim()
+      );
     };
 
     const cleanA = normalize(a);
@@ -61,8 +90,8 @@ const addonService = Layer.succeed(AddonService, {
     if (cleanA === cleanB) return 1;
 
     // Split into words for word-level matching
-    const wordsA = cleanA.split(/\s+/).filter(word => word.length > 0);
-    const wordsB = cleanB.split(/\s+/).filter(word => word.length > 0);
+    const wordsA = cleanA.split(/\s+/).filter((word) => word.length > 0);
+    const wordsB = cleanB.split(/\s+/).filter((word) => word.length > 0);
 
     if (wordsA.length === 0 || wordsB.length === 0) return 0;
 
@@ -79,7 +108,7 @@ const addonService = Layer.succeed(AddonService, {
         if (usedWordsB.has(i)) continue;
 
         const wordB = wordsB[i];
-        
+
         // Exact word match
         if (wordA === wordB) {
           exactMatches++;
@@ -97,7 +126,11 @@ const addonService = Layer.succeed(AddonService, {
       }
 
       // If we found a good partial match and haven't used exact match
-      if (bestMatchIndex !== -1 && !usedWordsB.has(bestMatchIndex) && bestMatch > 0) {
+      if (
+        bestMatchIndex !== -1 &&
+        !usedWordsB.has(bestMatchIndex) &&
+        bestMatch > 0
+      ) {
         partialMatches++;
         usedWordsB.add(bestMatchIndex);
       }
@@ -108,88 +141,102 @@ const addonService = Layer.succeed(AddonService, {
     const totalWords = Math.max(wordsA.length, wordsB.length);
     const exactScore = exactMatches / totalWords;
     const partialScore = (partialMatches * 0.7) / totalWords;
-    
+
     return Math.min(1, exactScore + partialScore);
 
     function calculateCharacterOverlap(str1: string, str2: string): number {
       if (str1.length < 2 || str2.length < 2) return str1 === str2 ? 1 : 0;
-      
+
       const bigrams1 = new Set<string>();
       const bigrams2 = new Set<string>();
-      
+
       for (let i = 0; i < str1.length - 1; i++) {
         bigrams1.add(str1.substring(i, i + 2));
       }
-      
+
       for (let i = 0; i < str2.length - 1; i++) {
         bigrams2.add(str2.substring(i, i + 2));
       }
-      
-      const intersection = [...bigrams1].filter(bg => bigrams2.has(bg)).length;
+
+      const intersection = [...bigrams1].filter((bg) =>
+        bigrams2.has(bg),
+      ).length;
       const union = bigrams1.size + bigrams2.size - intersection;
-      
+
       return union > 0 ? intersection / union : 0;
     }
-  }
+  },
 });
 
-
 const program = Effect.gen(function* () {
-
   const scraper = new Scraper();
-  const search = new SearchTool<{ name: string, url: string }>([], ['name']);
+  const search = new SearchTool<{ name: string; url: string }>([], ["name"]);
 
   const { addon, stringSimilarity } = yield* AddonService;
-  
-  addon.on('configure', (config) => config
-    .addBooleanOption(option => option
-      .setName('manualSelect')
-      .setDisplayName('Service Selection')
-      .setDescription('Manually select the service you want to use for downloading games. Useful for services who rate limit or have download limits.')
-      .setDefaultValue(false)
-    )
-    .addBooleanOption(option => option
-      .setName('disallowCaptchaBased')
-      .setDisplayName('Disallow Captcha Based Services')
-      .setDescription('Disallow services that require a captcha to be solved.')
-      .setDefaultValue(false)
-    )
-    .addActionOption(option => 
-      option
-        .setName('clearCloudflareCookies')
-        .setDisplayName('Clear Cloudflare Cookies')
-        .setDescription('Clear the Cloudflare cookies from the browser.')
-        .setTaskName('clearCloudflareCookies')
-        .setButtonText('Clear')
-    )
-    .addActionOption(option => option
-      .setName('clearDownloadCache')
-      .setDisplayName('Clear Steamrip Cache')
-      .setDescription('Clear the Steamrip cache from the device.')
-      .setTaskName('clearDownloadCache')
-      .setButtonText('Clear')
-    )
-  )
 
-  addon.onTask('clearCloudflareCookies', (task) => Effect.gen(function*() {
-    yield* headerManager.clearHeaders();
-    yield* Effect.sync(() => task.log('Cloudflare cookies cleared.'));
-    yield* Effect.sync(() => task.complete());
-  }).pipe(Effect.runPromise));
-  addon.onTask('clearDownloadCache', (task) => Effect.gen(function*() {
-    yield* scraper.cleanupAllScrapes();
-    yield* Effect.sync(() => task.log('Steamrip cache cleared.'));
-    yield* Effect.sync(() => task.complete());
-  }).pipe(Effect.runPromise));
+  addon.on("configure", (config) =>
+    config
+      .addBooleanOption((option) =>
+        option
+          .setName("manualSelect")
+          .setDisplayName("Service Selection")
+          .setDescription(
+            "Manually select the service you want to use for downloading games. Useful for services who rate limit or have download limits.",
+          )
+          .setDefaultValue(false),
+      )
+      .addBooleanOption((option) =>
+        option
+          .setName("disallowCaptchaBased")
+          .setDisplayName("Disallow Captcha Based Services")
+          .setDescription(
+            "Disallow services that require a captcha to be solved.",
+          )
+          .setDefaultValue(false),
+      )
+      .addActionOption((option) =>
+        option
+          .setName("clearCloudflareCookies")
+          .setDisplayName("Clear Cloudflare Cookies")
+          .setDescription("Clear the Cloudflare cookies from the browser.")
+          .setTaskName("clearCloudflareCookies")
+          .setButtonText("Clear"),
+      )
+      .addActionOption((option) =>
+        option
+          .setName("clearDownloadCache")
+          .setDisplayName("Clear Steamrip Cache")
+          .setDescription("Clear the Steamrip cache from the device.")
+          .setTaskName("clearDownloadCache")
+          .setButtonText("Clear"),
+      ),
+  );
 
-  const refreshSteamripCatalog = Effect.fn('refreshSteamripCatalog')(function*(force: boolean = false) {
+  addon.onTask("clearCloudflareCookies", (task) =>
+    Effect.gen(function* () {
+      yield* headerManager.clearHeaders();
+      yield* Effect.sync(() => task.log("Cloudflare cookies cleared."));
+      yield* Effect.sync(() => task.complete());
+    }).pipe(Effect.runPromise),
+  );
+  addon.onTask("clearDownloadCache", (task) =>
+    Effect.gen(function* () {
+      yield* scraper.cleanupAllScrapes();
+      yield* Effect.sync(() => task.log("Steamrip cache cleared."));
+      yield* Effect.sync(() => task.complete());
+    }).pipe(Effect.runPromise),
+  );
+
+  const refreshSteamripCatalog = Effect.fn("refreshSteamripCatalog")(function* (
+    force: boolean = false,
+  ) {
     yield* headerManager.loadHeaders();
     yield* pipe(
-      cloudflareSolve('https://steamrip.com', addon),
+      cloudflareSolve("https://steamrip.com", addon),
       Effect.catchAll((error) => {
-        console.error('Background Cloudflare solve failed:', error);
+        console.error("Background Cloudflare solve failed:", error);
         return Effect.succeed(undefined);
-      })
+      }),
     );
 
     yield* scraper.cleanupExpiredScrapes();
@@ -198,118 +245,168 @@ const program = Effect.gen(function* () {
     yield* Effect.sync(() => search.addItems(scraper.catalog.games));
   });
 
-  addon.on('connect', (event) => {
-    const connectEffect = Effect.fn('connectEffect')(function*() {
+  addon.on("connect", (event) => {
+    const connectEffect = Effect.fn("connectEffect")(function* () {
       const task = yield* Effect.tryPromise({
         try: () => addon.task(),
-        catch: () => new Error('Failed to create task') // Define a specific error if needed
+        catch: () => new Error("Failed to create task"), // Define a specific error if needed
       });
 
       // check if the system is online first, and if not, then abort mission!
-      console.log('Checking online...');
+      console.log("Checking online...");
       yield* Effect.tryPromise({
-        try: async () => axios({
-          url: 'https://google.com',
-          timeout: 5000
-        }),
-        catch: () => new NotOnlineError()
+        try: async () =>
+          axios({
+            url: "https://google.com",
+            timeout: 5000,
+          }),
+        catch: () => new NotOnlineError(),
       }).pipe(
-        Effect.catchTag('NotOnlineError', (_) => {
+        Effect.catchTag("NotOnlineError", (_) => {
           addon.notify({
             id: String(Math.floor(Math.random() * 10000)),
-            message: 'Steamrip Addon: Cannot access network check, stopping addon.',
-            type: 'error'
-          })
+            message:
+              "Steamrip Addon: Cannot access network check, stopping addon.",
+            type: "error",
+          });
 
-          return Effect.dieMessage('Cannot access network check')
+          return Effect.dieMessage("Cannot access network check");
         }),
-      )
+      );
       // check if we're on linux, and if so, run CHROME_PATH="$(flatpak info --show-location org.chromium.Chromium)/files/chromium/chrome" to set the chrome path
-      if (process.platform === 'linux') {
-        console.log('Setting CHROME_PATH for this device.');
+      if (process.platform === "linux") {
+        console.log("Setting CHROME_PATH for this device.");
         yield* Effect.try(() => {
-          const flatpakPath = execSync('flatpak info --show-location org.chromium.Chromium').toString().trim();
-          process.env.CHROME_PATH = join(flatpakPath, 'files', 'chromium', 'chrome');
-        }).pipe(Effect.catchAll((err) => {
-          console.log('Error in setting CHROME_PATH for this device. Hopefully everything still works..', err);
-          return Effect.succeed(undefined);
-        }));
-        console.log('CHROME_PATH set to', process.env.CHROME_PATH);
+          const flatpakPath = execSync(
+            "flatpak info --show-location org.chromium.Chromium",
+          )
+            .toString()
+            .trim();
+          process.env.CHROME_PATH = join(
+            flatpakPath,
+            "files",
+            "chromium",
+            "chrome",
+          );
+        }).pipe(
+          Effect.catchAll((err) => {
+            console.log(
+              "Error in setting CHROME_PATH for this device. Hopefully everything still works..",
+              err,
+            );
+            return Effect.succeed(undefined);
+          }),
+        );
+        console.log("CHROME_PATH set to", process.env.CHROME_PATH);
       }
       // Avoid launching Chrome during connect. Cloudflare/browser work is performed by
       // the background catalog refresh or by the first uncached search instead.
-      process.env.PUPPETEER_PROTOCOL_TIMEOUT = String(PUPPETEER_OPTIONS.protocolTimeout || 180000);
-      yield* Effect.sync(() => task.log('Loading cached Steamrip catalog...'));
+      process.env.PUPPETEER_PROTOCOL_TIMEOUT = String(
+        PUPPETEER_OPTIONS.protocolTimeout || 180000,
+      );
+      yield* Effect.sync(() => task.log("Loading cached Steamrip catalog..."));
       const loadedCachedCatalog = yield* scraper.processLocalsIfPresent();
       if (loadedCachedCatalog) {
         yield* Effect.sync(() => search.addItems(scraper.catalog.games));
-        yield* Effect.sync(() => task.log(`Loaded ${scraper.catalog.games.length} cached Steamrip games.`));
+        yield* Effect.sync(() =>
+          task.log(
+            `Loaded ${scraper.catalog.games.length} cached Steamrip games.`,
+          ),
+        );
       } else {
-        yield* Effect.sync(() => task.log('No cached Steamrip catalog found; first search may take longer.'));
+        yield* Effect.sync(() =>
+          task.log(
+            "No cached Steamrip catalog found; first search may take longer.",
+          ),
+        );
       }
 
       const stats = yield* scraper.getScrapeStats();
-      yield* Effect.sync(() => task.log(`Scrape cache: ${stats.valid} valid, ${stats.expired} expired, ${stats.total} total files`));
+      yield* Effect.sync(() =>
+        task.log(
+          `Scrape cache: ${stats.valid} valid, ${stats.expired} expired, ${stats.total} total files`,
+        ),
+      );
 
-      yield* Effect.sync(() => task.log('Starting Steamrip catalog refresh in the background...'));
+      yield* Effect.sync(() =>
+        task.log("Starting Steamrip catalog refresh in the background..."),
+      );
       yield* Effect.sync(() => {
         pipe(
           refreshSteamripCatalog(false),
-          Effect.tap(() => Effect.sync(() => addon.notify({
-            message: 'Steamrip catalog refreshed.',
-            id: 'steamrip-catalog-refreshed',
-            type: 'success',
-          }))),
-          Effect.catchAll((error) => Effect.sync(() => {
-            console.error('Background Steamrip catalog refresh failed:', error);
-            addon.notify({
-              message: 'Steamrip catalog refresh failed. Searches will use cached data if available.',
-              id: 'steamrip-catalog-refresh-failed',
-              type: 'warning',
-            });
-          })),
-          Effect.runFork
+          Effect.tap(() =>
+            Effect.sync(() =>
+              addon.notify({
+                message: "Steamrip catalog refreshed.",
+                id: "steamrip-catalog-refreshed",
+                type: "success",
+              }),
+            ),
+          ),
+          Effect.catchAll((error) =>
+            Effect.sync(() => {
+              console.error(
+                "Background Steamrip catalog refresh failed:",
+                error,
+              );
+              addon.notify({
+                message:
+                  "Steamrip catalog refresh failed. Searches will use cached data if available.",
+                id: "steamrip-catalog-refresh-failed",
+                type: "warning",
+              });
+            }),
+          ),
+          Effect.runFork,
         );
       });
 
       yield* Effect.sync(() => task.complete());
     });
 
-    Effect.runPromise(connectEffect()).catch(error => {
+    Effect.runPromise(connectEffect()).catch((error) => {
       console.error("Error during connect:", error);
       // Show user-friendly error message for Cloudflare failures
-      if (error.message && (error.message.includes('Cloudflare') || error.message.includes('cf_') || error.message.includes('No valid Cloudflare headers'))) {
+      if (
+        error.message &&
+        (error.message.includes("Cloudflare") ||
+          error.message.includes("cf_") ||
+          error.message.includes("No valid Cloudflare headers"))
+      ) {
         addon.notify({
-          message: 'Failed to solve Cloudflare protection. Please try again or check your internet connection.',
-          id: 'cloudflare-error',
-          type: 'error',
+          message:
+            "Failed to solve Cloudflare protection. Please try again or check your internet connection.",
+          id: "cloudflare-error",
+          type: "error",
         });
       }
     });
   });
 
-  addon.on('search', (info, event) => {
+  addon.on("search", (info, event) => {
     const { for: forType } = info;
-    if (forType === 'task') {
+    if (forType === "task") {
       event.resolve([]);
       return;
     }
 
     const { storefront, appID } = info;
     event.defer();
-    
-    const searchEffect = Effect.fn('searchEffect')(function* () {
+
+    const searchEffect = Effect.fn("searchEffect")(function* () {
       const steamResult = yield* Effect.tryPromise({
-        try: async () => await addon.getAppDetails(appID, 'steam'),
-        catch: () => new SteamSearchError({ query: String(appID) })
+        try: async () => await addon.getAppDetails(appID, "steam"),
+        catch: () => new SteamSearchError({ query: String(appID) }),
       });
 
       if (!steamResult) {
-        return yield* Effect.fail(new SteamSearchError({ query: String(appID) }));
+        return yield* Effect.fail(
+          new SteamSearchError({ query: String(appID) }),
+        );
       }
 
       if (scraper.catalog.games.length === 0) {
-        console.log('Steamrip catalog is empty, refreshing before search...');
+        console.log("Steamrip catalog is empty, refreshing before search...");
         yield* refreshSteamripCatalog(false);
       }
 
@@ -324,7 +421,6 @@ const program = Effect.gen(function* () {
         }
       }
 
-
       // Require a minimum similarity to consider it a valid match
       const SIMILARITY_THRESHOLD = 0.4;
       console.log("Best score", bestScore);
@@ -332,16 +428,22 @@ const program = Effect.gen(function* () {
 
       if (!game) {
         console.log("No game found");
-        return yield* Effect.fail(new NoGameFoundError({ query: String(appID) }));
+        return yield* Effect.fail(
+          new NoGameFoundError({ query: String(appID) }),
+        );
       }
-      
+
       console.log("Found game", game.name);
 
       // if this is an update, we need to check if the game has already been downloaded
-      if (forType === 'update') {
+      if (forType === "update") {
         const { cwd } = info.libraryInfo;
         const steamripInfo = yield* Effect.tryPromise(
-          async () => await fs.readFile(join(cwd as string, 'steamrip-info.json'), 'utf8'),
+          async () =>
+            await fs.readFile(
+              join(cwd as string, "steamrip-info.json"),
+              "utf8",
+            ),
         ).pipe(Effect.catchAll(() => Effect.succeed(undefined)));
         if (steamripInfo) {
           const { title } = JSON.parse(steamripInfo);
@@ -349,20 +451,22 @@ const program = Effect.gen(function* () {
             console.log("Game already downloaded.", game.name);
             return [
               {
-                name: 'You have the latest version Steamrip has for this game.',
-                downloadType: 'empty',
-              } as SearchResult
+                name: "You have the latest version Steamrip has for this game.",
+                downloadType: "empty",
+              } as SearchResult,
             ];
           }
         }
       }
-      const resolutions = [{
-        name: game.name,
-        downloadType: 'request',
-        manifest: {
-          url: game.url
-        }
-      }] as SearchResult[];
+      const resolutions = [
+        {
+          name: game.name,
+          downloadType: "request",
+          manifest: {
+            url: game.url,
+          },
+        },
+      ] as SearchResult[];
 
       return resolutions;
     });
@@ -377,80 +481,104 @@ const program = Effect.gen(function* () {
         SteamSearchError: (e: SteamSearchError) => {
           console.log("Steam search error", e);
           return Effect.succeed([]);
-        }
+        },
       }),
       Effect.catchAll((error: unknown) => {
         console.error("Search error:", error);
-        if (error instanceof Error && error.message && error.message.includes('No valid Cloudflare headers')) {
+        if (
+          error instanceof Error &&
+          error.message &&
+          error.message.includes("No valid Cloudflare headers")
+        ) {
           addon.notify({
-            message: 'Cloudflare headers are missing. Please reconnect to solve Cloudflare protection.',
-            id: 'cloudflare-headers-missing',
-            type: 'warning',
+            message:
+              "Cloudflare headers are missing. Please reconnect to solve Cloudflare protection.",
+            id: "cloudflare-headers-missing",
+            type: "warning",
           });
         }
         return Effect.succeed([]);
       }),
-      Effect.andThen(res => event.resolve(res)),
-      Effect.runFork
+      Effect.andThen((res) => event.resolve(res)),
+      Effect.runFork,
     );
   });
 
-  addon.on('request-dl', (appID, info, event) => {
+  addon.on("request-dl", (appID, info, event) => {
     const searchEvent = event as EventResponse<SearchResult>;
     searchEvent.defer();
 
     const getDownloadLinks = Effect.try({
       try: () => {
         const url = info.manifest?.url;
-        if (typeof url !== 'string' || !url) throw new NoGameFoundError({ query: String(appID) });
+        if (typeof url !== "string" || !url)
+          throw new NoGameFoundError({ query: String(appID) });
         return scraper.scrapeGameDownloads(url);
       },
-      catch: (e) => e instanceof NoGameFoundError ? e : new ScrapeGameDownloadsError({ game: String(appID) })
+      catch: (e) =>
+        e instanceof NoGameFoundError
+          ? e
+          : new ScrapeGameDownloadsError({ game: String(appID) }),
     });
 
-    const findWorkingService = Effect.fn('findWorkingService')(function*(links: DownloadLink[], event: EventResponse<SearchResult>) {
+    const findWorkingService = Effect.fn("findWorkingService")(function* (
+      links: DownloadLink[],
+      event: EventResponse<SearchResult>,
+    ) {
       const ranked = yield* pipe(
         Effect.succeed(links),
         Effect.andThen((links) => {
-          if (addon.config.getBooleanValue('manualSelect') ?? false) {
+          if (addon.config.getBooleanValue("manualSelect") ?? false) {
             return Effect.promise(async () => {
               const resolved = await Effect.runPromise(
                 Effect.forEach(links, (link) =>
                   resolveServiceFromUrl(link.url).pipe(
-                    Effect.map((service) => ({ service, url: link.url }))
-                  )
-                )
+                    Effect.map((service) => ({ service, url: link.url })),
+                  ),
+                ),
               );
-              const config = new ConfigurationBuilder()
-                .addStringOption(option =>
+              const config = new ConfigurationBuilder().addStringOption(
+                (option) =>
                   option
-                    .setName('service')
-                    .setDisplayName('Service')
-                    .setDescription('Please select the service you want to use for downloading this game.')
-                    .setAllowedValues(resolved.map(({ service }) => service.name))
-                );
-              const input = await event.askForInput(
-                'Manual Service Selection',
-                'Please select the service you want to use for downloading this game.',
-                config
+                    .setName("service")
+                    .setDisplayName("Service")
+                    .setDescription(
+                      "Please select the service you want to use for downloading this game.",
+                    )
+                    .setAllowedValues(
+                      resolved.map(({ service }) => service.name),
+                    ),
               );
-              const selected = resolved.find(({ service }) => service.name === input.service);
+              const input = await event.askForInput(
+                "Manual Service Selection",
+                "Please select the service you want to use for downloading this game.",
+                config,
+              );
+              const selected = resolved.find(
+                ({ service }) => service.name === input.service,
+              );
               return selected ? [{ url: selected.url }] : links;
             });
           }
           return Effect.succeed(links);
         }),
-        Effect.andThen(rankDownloadLinks)
+        Effect.andThen(rankDownloadLinks),
       );
 
-      return yield* Effect.gen(function*() {
+      return yield* Effect.gen(function* () {
         let lastError: unknown = null;
         for (const { service, url } of ranked) {
           try {
             console.log(`Trying service: ${service.name}`);
             let currentService = service;
-            if (currentService.isCaptchaBased() && addon.config.getBooleanValue('disallowCaptchaBased')) {
-              console.log('Skipping captcha based service', currentService.name);
+            if (
+              currentService.isCaptchaBased() &&
+              addon.config.getBooleanValue("disallowCaptchaBased")
+            ) {
+              console.log(
+                "Skipping captcha based service",
+                currentService.name,
+              );
               continue;
             }
 
@@ -459,7 +587,7 @@ const program = Effect.gen(function* () {
             if (currentService instanceof FileCryptService) {
               const fcResult = yield* pipe(
                 currentService.scrapeDownloadLinks(currentUrl, event),
-                Effect.catchAll(() => Effect.succeed([]))
+                Effect.catchAll(() => Effect.succeed([])),
               );
               if (fcResult.length === 0 || !fcResult[0].url) {
                 continue;
@@ -473,10 +601,10 @@ const program = Effect.gen(function* () {
 
             const downloadUrls = yield* pipe(
               currentService.scrapeDownloadLinks(currentUrl, event),
-              Effect.catchAll(e => { 
-                console.error('Error', e);
+              Effect.catchAll((e) => {
+                console.error("Error", e);
                 return Effect.succeed([]);
-              })
+              }),
             );
             // test the download links to see if we can get a 200 response
             let linksGood = true;
@@ -509,7 +637,11 @@ const program = Effect.gen(function* () {
               continue;
             }
             // Found a working service, break out
-            return { url: downloadUrls[0].url, name: downloadUrls[0].name, headers: downloadUrls[0].headers };
+            return {
+              url: downloadUrls[0].url,
+              name: downloadUrls[0].name,
+              headers: downloadUrls[0].headers,
+            };
           } catch (err) {
             lastError = err;
             // Continue to next service
@@ -517,26 +649,41 @@ const program = Effect.gen(function* () {
         }
         // If none worked, fail with the last error or a generic one
         addon.notify({
-          id: 'no-download-found-steamrip',
-          message: 'No download supported found for ' + info.name,
-          type: 'error'
-        })
-        yield* Effect.promise(async () => await event.askForInput('No download link supported', 'You are seeing this message because there was an issue with downloading the game through one of the services. Please try again, and if you still can\'t download it, please report the issue to the thread.', new ConfigurationBuilder()));
+          id: "no-download-found-steamrip",
+          message: "No download supported found for " + info.name,
+          type: "error",
+        });
+        yield* Effect.promise(
+          async () =>
+            await event.askForInput(
+              "No download link supported",
+              "You are seeing this message because there was an issue with downloading the game through one of the services. Please try again, and if you still can't download it, please report the issue to the thread.",
+              new ConfigurationBuilder(),
+            ),
+        );
         return yield* Effect.fail(lastError ?? new NoDownloadFoundError());
       });
     });
 
-    const requestDlEffect = Effect.fn('requestDlEffect')(function*() {
+    const requestDlEffect = Effect.fn("requestDlEffect")(function* () {
       const links = yield* getDownloadLinks;
-      
-      const downloadDetails = yield* findWorkingService(yield* links, searchEvent);
-      
-      
+
+      const downloadDetails = yield* findWorkingService(
+        yield* links,
+        searchEvent,
+      );
+
       return {
-        downloadType: 'direct',
+        downloadType: "direct",
         name: info.name,
-        files: [{ name: downloadDetails.name, downloadURL: downloadDetails.url, headers: downloadDetails.headers }],
-        manifest: info.manifest
+        files: [
+          {
+            name: downloadDetails.name,
+            downloadURL: downloadDetails.url,
+            headers: downloadDetails.headers,
+          },
+        ],
+        manifest: info.manifest,
       } as SearchResult;
     });
 
@@ -544,400 +691,547 @@ const program = Effect.gen(function* () {
       requestDlEffect(),
       Effect.catchAll((error: unknown) => {
         console.error("Error in request-dl:", error);
-        if (error instanceof Error && error.message && error.message.includes('No valid Cloudflare headers')) {
+        if (
+          error instanceof Error &&
+          error.message &&
+          error.message.includes("No valid Cloudflare headers")
+        ) {
           addon.notify({
-            message: 'Cloudflare headers are missing. Please reconnect to solve Cloudflare protection.',
-            id: 'cloudflare-headers-missing',
-            type: 'warning',
+            message:
+              "Cloudflare headers are missing. Please reconnect to solve Cloudflare protection.",
+            id: "cloudflare-headers-missing",
+            type: "warning",
           });
         }
-        searchEvent.fail('Failed to get download link');
+        searchEvent.fail("Failed to get download link");
         return Effect.fail(error);
       }),
-      Effect.andThen(res => searchEvent.resolve(res)),
-      Effect.runFork
+      Effect.andThen((res) => searchEvent.resolve(res)),
+      Effect.runFork,
     );
   });
 
-  addon.on('setup', ({ path, type, multiPartFiles, appID, manifest, for: forType }, event) => {
-    if (type === 'empty') {
-      event.fail('Game already downloaded.');
-      return;
-    }
-    event.log(`Setup: path: ${path}, multiPartFiles: ${multiPartFiles}`);
-    event.defer();
-    const setupEffect = Effect.fn('setupEffect')(function*() {
-      const programFiles7zip = join(process.env['ProgramFiles'] || 'C:\\Program Files', '7-Zip', '7z.exe');
-      const file = multiPartFiles?.[0];
-      if (!file) return yield* Effect.fail(new NoFileFoundError());
-
-      const showErrorScreen = async () => {
-        await event.askForInput('Error', 'Oops! It seems like this game wans\'t downloaded correctly. Go to the path: "' + path + '" and delete the file to try again. It is likely that this game is hosted on a service that is not currently working. Stay subscribed to the thread to get notified when it is fixed.', new ConfigurationBuilder())
+  addon.on(
+    "setup",
+    ({ path, type, multiPartFiles, appID, manifest, for: forType }, event) => {
+      if (type === "empty") {
+        event.fail("Game already downloaded.");
+        return;
       }
+      event.log(`Setup: path: ${path}, multiPartFiles: ${multiPartFiles}`);
+      event.defer();
+      const setupEffect = Effect.fn("setupEffect")(function* () {
+        const programFiles7zip = join(
+          process.env["ProgramFiles"] || "C:\\Program Files",
+          "7-Zip",
+          "7z.exe",
+        );
+        const file = multiPartFiles?.[0];
+        if (!file) return yield* Effect.fail(new NoFileFoundError());
 
-      event.log('Waiting for zip to be unlocked by OpenGameInstaller...');
-      yield* Effect.sleep(1000);
+        const showErrorScreen = async () => {
+          await event.askForInput(
+            "Error",
+            "Oops! It seems like this game wans't downloaded correctly. Go to the path: \"" +
+              path +
+              '" and delete the file to try again. It is likely that this game is hosted on a service that is not currently working. Stay subscribed to the thread to get notified when it is fixed.',
+            new ConfigurationBuilder(),
+          );
+        };
 
-      // now, inferring that it's a rar file, we need to extract it to the "path" folder
-      // use 7zip in the program files if this is a windows machine
+        event.log("Waiting for zip to be unlocked by OpenGameInstaller...");
+        yield* Effect.sleep(1000);
 
-      // if there are other files in this path other than the input archive, we need to delete them
-      const files = yield* Effect.tryPromise({
-        try: async () => await fs.readdir(path),
-        catch: () => []
-      });
-      if (files.length > 1) {
-        event.log('Found other files in the path, deleting them...');
-        for (const fileName of files) {
-          if (fileName !== file.name) {
-            const result = yield* pipe(
-              Effect.tryPromise({
-                try: async () => {
-                  await fs.rm(join(path, fileName), { force: true, recursive: true, maxRetries: 3, retryDelay: 1000 });
-                  return true;
-                },
-                catch: () => {
-                  console.error('Error deleting file', fileName);
-                  return false;
-                }
+        // now, inferring that it's a rar file, we need to extract it to the "path" folder
+        // use 7zip in the program files if this is a windows machine
+
+        // if there are other files in this path other than the input archive, we need to delete them
+        const files = yield* Effect.tryPromise({
+          try: async () => await fs.readdir(path),
+          catch: () => [],
+        });
+        if (files.length > 1) {
+          event.log("Found other files in the path, deleting them...");
+          for (const fileName of files) {
+            if (fileName !== file.name) {
+              const result = yield* pipe(
+                Effect.tryPromise({
+                  try: async () => {
+                    await fs.rm(join(path, fileName), {
+                      force: true,
+                      recursive: true,
+                      maxRetries: 3,
+                      retryDelay: 1000,
+                    });
+                    return true;
+                  },
+                  catch: () => {
+                    console.error("Error deleting file", fileName);
+                    return false;
+                  },
+                }),
+                Effect.catchAll((e) => {
+                  console.error("Error deleting file", fileName);
+                  return Effect.succeed(false);
+                }),
+              );
+            }
+          }
+        }
+        event.log(
+          "Extracting archive (this may take a while). We recommend to check the folder in " +
+            path +
+            " to see if the extraction is progressing.",
+        );
+        if (process.platform === "win32") {
+          const command = `"${programFiles7zip}" x "${join(path, file.name)}" -o"${path}" -y`;
+          event.log(`Running command: ${command}`);
+          try {
+            execSync(command, { stdio: "inherit" });
+          } catch (error) {
+            console.error("Error extracting archive", error);
+            yield* Effect.promise(async () => showErrorScreen());
+            return yield* Effect.fail(
+              new RarExtractionError({ path, error: (error as Error).message }),
+            );
+          }
+        } else if (
+          process.platform === "darwin" ||
+          process.platform === "linux"
+        ) {
+          // use 'unrar' instead of 7z
+          const result = yield* Effect.tryPromise({
+            try: () =>
+              new Promise<{ error?: Error; status: number }>((resolve) => {
+                const child = spawn(
+                  "unrar",
+                  [
+                    "x", // extract with full paths
+                    join(path, file.name), // input archive
+                    `${path}`, // output directory
+                    "-y", // say yes to all prompts
+                  ],
+                  { stdio: "ignore" },
+                );
+
+                child.on("error", (error) => {
+                  resolve({ error, status: 1 });
+                });
+
+                child.on("close", (code) => {
+                  resolve({ status: code ?? 1 });
+                });
               }),
-              Effect.catchAll(e => {  
-                console.error('Error deleting file', fileName);
-                return Effect.succeed(false);
-              })
+            catch: (error) => ({ error: error as Error, status: 1 }),
+          });
+          if (result.error) {
+            console.error("Error extracting archive", result);
+            console.error("Error extracting archive", result.error);
+            yield* Effect.promise(async () => showErrorScreen());
+            return yield* Effect.fail(
+              new RarExtractionError({ path, error: result.error.message }),
+            );
+          }
+          if (result.status !== 0) {
+            console.error("Error extracting archive", result.status);
+            yield* Effect.promise(async () => showErrorScreen());
+            return yield* Effect.fail(
+              new RarExtractionError({
+                path,
+                error: `unrar extraction failed with code ${result.status}`,
+              }),
             );
           }
         }
-      }
-      event.log('Extracting archive (this may take a while). We recommend to check the folder in ' + path + ' to see if the extraction is progressing.')
-      if (process.platform === 'win32') {
-        const command = `"${programFiles7zip}" x "${join(path, file.name)}" -o"${path}" -y`;
-        event.log(`Running command: ${command}`);
-        try {
-          execSync(command, { stdio: 'inherit' });
-        } catch (error) {
-          console.error('Error extracting archive', error);
-          yield* Effect.promise(async () => showErrorScreen());
-          return yield* Effect.fail(new RarExtractionError({ path, error: (error as Error).message }));
-        }
-      }
-      else if (process.platform === 'darwin' || process.platform === 'linux') {
-        // use 'unrar' instead of 7z
-        const result = yield* Effect.tryPromise({
-          try: () => new Promise<{ error?: Error; status: number }>((resolve) => {
-            const child = spawn('unrar', [
-              'x', // extract with full paths
-              join(path, file.name), // input archive
-              `${path}`, // output directory
-              '-y' // say yes to all prompts
-            ], { stdio: 'ignore' });
 
-            child.on('error', (error) => {
-              resolve({ error, status: 1 });
-            });
+        // Get Steam App Details
+        let appDetails = yield* Effect.tryPromise(
+          async () => await addon.getAppDetails(appID, "steam"),
+        ).pipe(Effect.catchAll((_) => Effect.succeed(undefined)));
 
-            child.on('close', (code) => {
-              resolve({ status: code ?? 1 });
-            });
-          }),
-          catch: (error) => ({ error: error as Error, status: 1 })
+        // Get Latest Version
+        let latestVersion = (appDetails?.latestVersion ?? "1.0").trim();
+
+        // now, if there is a _CommonRedist folder, we need to put a boolean
+        const hasCommonRedist = yield* Effect.tryPromise({
+          try: async () =>
+            (await fs.stat(join(path, "_CommonRedist"))).isDirectory(),
+          catch: () => false,
         });
-        if (result.error) {
-          console.error('Error extracting archive', result);
-          console.error('Error extracting archive', result.error);
-          yield* Effect.promise(async () => showErrorScreen());
-          return yield* Effect.fail(new RarExtractionError({ path, error: result.error.message }));
-        }
-        if (result.status !== 0) {
-          console.error('Error extracting archive', result.status);
-          yield* Effect.promise(async () => showErrorScreen());
-          return yield* Effect.fail(new RarExtractionError({ path, error: `unrar extraction failed with code ${result.status}` }));
-        }
-      }
 
-      // Get Steam App Details
-      let appDetails = yield* Effect.tryPromise(async () => await addon.getAppDetails(appID, 'steam'))
-        .pipe(Effect.catchAll(_ => Effect.succeed(undefined)));
-
-      // Get Latest Version
-      let latestVersion = (appDetails?.latestVersion ?? '1.0').trim();
-
-      // now, if there is a _CommonRedist folder, we need to put a boolean
-      const hasCommonRedist = yield* Effect.tryPromise({
-        try: async () => (await fs.stat(join(path, '_CommonRedist'))).isDirectory(),
-        catch: () => false
-      });
-
-      // now check: if there are at least 2 folders in the path, and one is the _CommonRedist folder and the other is the game folder
-      const folders = yield* Effect.tryPromise({
-        try: async () => await fs.readdir(path),
-        catch: () => []
-      });
-      let autoFoundGameFolder = yield* pipe(
-        folders,
-        Effect.forEach(folder => Effect.tryPromise({
-          try: async () => [ folder, await fs.stat(join(path, folder)) ] as [string, Stats],
-          catch: () => undefined
-        }), { concurrency: 'unbounded' }),
-        // filter to only folders
-        Effect.map(folders => folders.filter(folder => folder && folder[1].isDirectory())),
-        // Now check if there are 2 folders, and one is the _CommonRedist folder and the other is the game folder
-        Effect.map(folders => {
-          if (folders.length !== 2) return undefined;
-          if (folders.some(folder => folder[0] === '_CommonRedist') && folders.some(folder => folder[0] !== '_CommonRedist')) {
-            return folders.find(folder => folder[0] !== '_CommonRedist')?.[0];
-          }
-          return undefined;
-        }),
-      );
-      
-      if (autoFoundGameFolder) {
-        // move all the contents in that folder into the path
-        yield* Effect.tryPromise({
-          try: async () => {
-            const contents = await fs.readdir(join(path, autoFoundGameFolder as string));
-            for (const content of contents) {
-              await fs.rename(join(path, autoFoundGameFolder as string, content), join(path, content));
+        // now check: if there are at least 2 folders in the path, and one is the _CommonRedist folder and the other is the game folder
+        const folders = yield* Effect.tryPromise({
+          try: async () => await fs.readdir(path),
+          catch: () => [],
+        });
+        let autoFoundGameFolder = yield* pipe(
+          folders,
+          Effect.forEach(
+            (folder) =>
+              Effect.tryPromise({
+                try: async () =>
+                  [folder, await fs.stat(join(path, folder))] as [
+                    string,
+                    Stats,
+                  ],
+                catch: () => undefined,
+              }),
+            { concurrency: "unbounded" },
+          ),
+          // filter to only folders
+          Effect.map((folders) =>
+            folders.filter((folder) => folder && folder[1].isDirectory()),
+          ),
+          // Now check if there are 2 folders, and one is the _CommonRedist folder and the other is the game folder
+          Effect.map((folders) => {
+            if (folders.length !== 2) return undefined;
+            if (
+              folders.some((folder) => folder[0] === "_CommonRedist") &&
+              folders.some((folder) => folder[0] !== "_CommonRedist")
+            ) {
+              return folders.find(
+                (folder) => folder[0] !== "_CommonRedist",
+              )?.[0];
             }
-            await fs.rmdir(join(path, autoFoundGameFolder as string), { recursive: true });
             return undefined;
-          },
-          catch: () => {
-            console.log('Failed to move folder', join(path, autoFoundGameFolder as string));
-            return Effect.succeed(undefined);
-          }
-        });
-      }
-
-      let executables: string[] = [];
-      if (autoFoundGameFolder) {
-        console.log("Auto found game folder", autoFoundGameFolder, 'Searching for executables...');
-        executables = yield* pipe(
-          Effect.tryPromise({
-            try: async () => await fs.readdir(path),
-            catch: () => []
           }),
-          Effect.map(executables => executables.filter(executable => executable.endsWith('.exe'))),
-          // remove UnityCrashHandler
-          Effect.map(executables => executables.filter(executable => !executable.toLowerCase().includes('unitycrashhandler'))),
-          // remove uninstall00.exe
-          Effect.map(executables => executables.filter(executable => !executable.toLowerCase().includes('unins000.exe'))),
-          Effect.map(executables => executables.map(executable => join(path, executable)))
         );
-        console.log("Found executables", executables);
-        if (executables.length === 0) {
-          event.log('No executables found in the game folder');
-          autoFoundGameFolder = undefined;
-        }
-      }
 
-
-      // Lossless Scaling Has Some Unique Properties
-      if (appID === 993090 && process.platform === 'linux') {
-        // check if the executable is "LosslessScaling.exe"
-        if (executables.some(executable => executable.toLowerCase().includes('losslessscaling.exe'))) {
-          // move the entire directory of the cwd to path /home/{user}/.steam/steamapps/common/Lossless Scaling
-          let newPath = join('/home/', process.env.USER as string, '.steam/steamapps/common/Lossless Scaling');
+        if (autoFoundGameFolder) {
+          // move all the contents in that folder into the path
           yield* Effect.tryPromise({
-            try: async () => await fs.rename(path, newPath),
+            try: async () => {
+              const contents = await fs.readdir(
+                join(path, autoFoundGameFolder as string),
+              );
+              for (const content of contents) {
+                await fs.rename(
+                  join(path, autoFoundGameFolder as string, content),
+                  join(path, content),
+                );
+              }
+              await fs.rmdir(join(path, autoFoundGameFolder as string), {
+                recursive: true,
+              });
+              return undefined;
+            },
             catch: () => {
-              console.error('Error moving directory', newPath);
+              console.log(
+                "Failed to move folder",
+                join(path, autoFoundGameFolder as string),
+              );
               return Effect.succeed(undefined);
-            }
-          })
-            
-          path = newPath;
-          executables = executables.map(executable => executable.replace(path, newPath));
-          // then just resolve everything and return
-          const losslessResponse: SetupEventResponse = {
-            cwd: newPath,
-            launchExecutable: executables[0],
-            version: latestVersion,
-            redistributables: [],
-            launchArguments: '%command%',
-            umu: {
-              umuId: `steam:${appID}`,
-              dllOverrides: [],
-              protonVersion: 'UMU-Proton'
-            }
-          };
-          return yield* Effect.succeed(
-            applySetupOverrides(appID, losslessResponse, {
-              appID,
-              platform: process.platform,
-              installPath: newPath,
-              executablePath: executables[0],
-              dllOverrides: [],
-            })
-          );
+            },
+          });
         }
-      }
 
-      // now it's time to build the ui for the setup
-      let inputAsk = new ConfigurationBuilder()
-      let addedInput = false;
-      // On Linux, always run common redist without prompting
-      if (hasCommonRedist && forType !== 'update' && process.platform !== 'linux') {
-        addedInput = true;
-        inputAsk = inputAsk.addBooleanOption(option => 
-          option.setName('runCommonRedist')
-            .setDisplayName('Run Common Redistributables')
-            .setDescription('Run the Common Redistributables (Useful if you are downloading a game from Steamrip for the first time, or if you don\'t know if you need it).')
-            .setDefaultValue(true)
-        );
-      }
-      if (!autoFoundGameFolder) {
-        addedInput = true;
-        inputAsk = inputAsk.addStringOption(option => 
-          option.setName('cwd')
-            .setDisplayName('Game Folder')
-            .setDescription('Game folder to run the game from. This is the folder that contains the game executable.')
-            .setInputType('folder')
-            .setDefaultValue('')
-        );
-      }
-      if (executables.length >= 0 && executables.length !== 1) {
-        addedInput = true;
-        if (executables.length > 1) {
-          inputAsk = inputAsk.addStringOption(option => 
-            option.setName('executable')
-              .setDisplayName('Executable Path')
-              .setDescription('Executable path to run the game (ends in .exe). This will be inside of the game folder.')
-              .setAllowedValues(executables.map(executable => relative(path, executable)))
-              .setInputType('text')
-              .setDefaultValue(relative(path, executables[0]))
+        let executables: string[] = [];
+        if (autoFoundGameFolder) {
+          console.log(
+            "Auto found game folder",
+            autoFoundGameFolder,
+            "Searching for executables...",
+          );
+          executables = yield* pipe(
+            Effect.tryPromise({
+              try: async () => await fs.readdir(path),
+              catch: () => [],
+            }),
+            Effect.map((executables) =>
+              executables.filter((executable) => executable.endsWith(".exe")),
+            ),
+            // remove UnityCrashHandler
+            Effect.map((executables) =>
+              executables.filter(
+                (executable) =>
+                  !executable.toLowerCase().includes("unitycrashhandler"),
+              ),
+            ),
+            // remove uninstall00.exe
+            Effect.map((executables) =>
+              executables.filter(
+                (executable) =>
+                  !executable.toLowerCase().includes("unins000.exe"),
+              ),
+            ),
+            Effect.map((executables) =>
+              executables.map((executable) => join(path, executable)),
+            ),
+          );
+          console.log("Found executables", executables);
+          if (executables.length === 0) {
+            event.log("No executables found in the game folder");
+            autoFoundGameFolder = undefined;
+          }
+        }
+
+        // Lossless Scaling Has Some Unique Properties
+        if (appID === 993090 && process.platform === "linux") {
+          // check if the executable is "LosslessScaling.exe"
+          if (
+            executables.some((executable) =>
+              executable.toLowerCase().includes("losslessscaling.exe"),
+            )
+          ) {
+            // move the entire directory of the cwd to path /home/{user}/.steam/steamapps/common/Lossless Scaling
+            let newPath = join(
+              "/home/",
+              process.env.USER as string,
+              ".steam/steamapps/common/Lossless Scaling",
+            );
+            yield* Effect.tryPromise({
+              try: async () => await fs.rename(path, newPath),
+              catch: () => {
+                console.error("Error moving directory", newPath);
+                return Effect.succeed(undefined);
+              },
+            });
+
+            path = newPath;
+            executables = executables.map((executable) =>
+              executable.replace(path, newPath),
+            );
+            // then just resolve everything and return
+            const losslessResponse: SetupEventResponse = {
+              cwd: newPath,
+              launchExecutable: executables[0],
+              version: latestVersion,
+              redistributables: [],
+              launchArguments: "%command%",
+              umu: {
+                umuId: `steam:${appID}`,
+                dllOverrides: [],
+                protonVersion: "UMU-Proton",
+              },
+            };
+            return yield* Effect.succeed(
+              applySetupOverrides(appID, losslessResponse, {
+                appID,
+                platform: process.platform,
+                installPath: newPath,
+                executablePath: executables[0],
+                dllOverrides: [],
+              }),
+            );
+          }
+        }
+
+        // now it's time to build the ui for the setup
+        let inputAsk = new ConfigurationBuilder();
+        let addedInput = false;
+        // On Linux, always run common redist without prompting
+        if (
+          hasCommonRedist &&
+          forType !== "update" &&
+          process.platform !== "linux"
+        ) {
+          addedInput = true;
+          inputAsk = inputAsk.addBooleanOption((option) =>
+            option
+              .setName("runCommonRedist")
+              .setDisplayName("Run Common Redistributables")
+              .setDescription(
+                "Run the Common Redistributables (Useful if you are downloading a game from Steamrip for the first time, or if you don't know if you need it).",
+              )
+              .setDefaultValue(true),
           );
         }
-        else {
-          inputAsk = inputAsk.addStringOption(option => 
-            option.setName('executable')
-              .setDisplayName('Executable Path')
-              .setDescription('Executable path to run the game (ends in .exe). This will be inside of the game folder.')
-              .setInputType('file')
-              .setDefaultValue('')
+        if (!autoFoundGameFolder) {
+          addedInput = true;
+          inputAsk = inputAsk.addStringOption((option) =>
+            option
+              .setName("cwd")
+              .setDisplayName("Game Folder")
+              .setDescription(
+                "Game folder to run the game from. This is the folder that contains the game executable.",
+              )
+              .setInputType("folder")
+              .setDefaultValue(""),
           );
         }
-      }
-      let input: {[ key: string ]: string | boolean | number } = {};
-      if (addedInput) {
-        input = yield* Effect.tryPromise({
-          try: async () => await event.askForInput('Setup your Game', 'Setup your new game', inputAsk),
-          catch: () => Effect.fail(new InputError({ error: 'Failed to ask for input' }))
+        if (executables.length >= 0 && executables.length !== 1) {
+          addedInput = true;
+          if (executables.length > 1) {
+            inputAsk = inputAsk.addStringOption((option) =>
+              option
+                .setName("executable")
+                .setDisplayName("Executable Path")
+                .setDescription(
+                  "Executable path to run the game (ends in .exe). This will be inside of the game folder.",
+                )
+                .setAllowedValues(
+                  executables.map((executable) => relative(path, executable)),
+                )
+                .setInputType("text")
+                .setDefaultValue(relative(path, executables[0])),
+            );
+          } else {
+            inputAsk = inputAsk.addStringOption((option) =>
+              option
+                .setName("executable")
+                .setDisplayName("Executable Path")
+                .setDescription(
+                  "Executable path to run the game (ends in .exe). This will be inside of the game folder.",
+                )
+                .setInputType("file")
+                .setDefaultValue(""),
+            );
+          }
+        }
+        let input: { [key: string]: string | boolean | number } = {};
+        if (addedInput) {
+          input = yield* Effect.tryPromise({
+            try: async () =>
+              await event.askForInput(
+                "Setup your Game",
+                "Setup your new game",
+                inputAsk,
+              ),
+            catch: () =>
+              Effect.fail(new InputError({ error: "Failed to ask for input" })),
+          });
+        }
+
+        // if the 'run common redist' is true (or on Linux, always run when available), we need to run the common redistributables
+        let commonRedistExecutables: { name: string; path: string }[] = [];
+        if (input.runCommonRedist || process.platform === "linux") {
+          commonRedistExecutables.push(
+            { name: "dotnet48", path: "winetricks" },
+            { name: "vcrun2019", path: "winetricks" },
+            { name: "xna40", path: "winetricks" },
+          );
+        }
+        if (autoFoundGameFolder) {
+          input.cwd = path;
+        }
+
+        if (
+          executables.length >= 0 &&
+          executables.length !== 1 &&
+          !String(input.executable).startsWith(path)
+        ) {
+          // match the input.executable to an actual path
+          input.executable = join(path, input.executable as string);
+        }
+
+        if (executables.length === 1) {
+          input.executable = executables[0];
+        }
+
+        // if this is unity and we're on linux, remove all dependencies since it works out of the box (and i've been testing for like 10+ hours and it just won't work otherwise)
+        // if (isUnity && process.platform === 'linux') {
+        //   commonRedistExecutables = [];
+        // }
+
+        // then remove the download path
+        yield* Effect.tryPromise({
+          try: async () =>
+            await fs.rm(join(path, file.name), {
+              maxRetries: 3,
+              retryDelay: 1000,
+            }),
+          catch: () => {
+            console.log(
+              "Failed to auto remove download path",
+              join(path, file.name),
+            );
+            return Effect.succeed(undefined);
+          },
         });
-      }
 
-      // if the 'run common redist' is true (or on Linux, always run when available), we need to run the common redistributables
-      let commonRedistExecutables: { name: string, path: string }[] = [];
-      if (input.runCommonRedist || (process.platform === 'linux')) {
-        commonRedistExecutables.push(
-          { name: 'dotnet48', path: 'winetricks' },
-          { name: 'vcrun2019', path: 'winetricks' },
-          { name: 'vcrun2015', path: 'winetricks' },
-          { name: 'xna40', path: 'winetricks' }
-        )
-      }
-      if (autoFoundGameFolder) {
-        input.cwd = path;
-      }
+        let winedlls: string[] = [];
+        // Get all dll files in the folder and use those
+        const dllFiles = (yield* Effect.tryPromise({
+          try: async () => await fs.readdir(input.cwd as string),
+          catch: () => [],
+        })) as string[];
 
-      if (executables.length >= 0 && executables.length !== 1 && !String(input.executable).startsWith(path)) {
-        // match the input.executable to an actual path
-        input.executable = join(path, input.executable as string);
-      }
+        winedlls = dllFiles
+          .filter((file) => file.toLowerCase().endsWith(".dll"))
+          .map((file) => file.replace(/\.dll$/i, ""));
 
-      if (executables.length === 1) {
-        input.executable = executables[0];
-      }
+        // write to the game install cwd a "steamrip-info.json"
 
-      // if this is unity and we're on linux, remove all dependencies since it works out of the box (and i've been testing for like 10+ hours and it just won't work otherwise)
-      // if (isUnity && process.platform === 'linux') {
-      //   commonRedistExecutables = [];
-      // }
+        const { title }: { title: string | undefined } = yield* manifest
+          ? pipe(
+              fetchSteamripHtml(manifest.url as string),
+              Effect.andThen((html) => new JSDOM(html)),
+              Effect.andThen((dom) => ({
+                title: dom.window.document
+                  .querySelector(".post-title")
+                  ?.textContent?.trim(),
+              })),
+              Effect.catchAll((error) => {
+                console.error(
+                  "Failed to get app details",
+                  manifest?.url,
+                  error,
+                );
+                return Effect.succeed({ title: undefined });
+              }),
+            )
+          : Effect.succeed({ title: undefined });
 
-      // then remove the download path
-      yield* Effect.tryPromise({
-        try: async () => await fs.rm(join(path, file.name), { maxRetries: 3, retryDelay: 1000 }),
-        catch: () => {
-          console.log('Failed to auto remove download path', join(path, file.name));
-          return Effect.succeed(undefined);
-        }
+        yield* Effect.tryPromise({
+          try: async () =>
+            await fs.writeFile(
+              join(input.cwd as string, "steamrip-info.json"),
+              JSON.stringify(
+                {
+                  title: title ?? "unknown",
+                },
+                null,
+                2,
+              ),
+            ),
+          catch: () => {
+            console.log(
+              "Failed to write steamrip-info.json",
+              join(input.cwd as string, "steamrip-info.json"),
+            );
+            return Effect.succeed(undefined);
+          },
+        });
+
+        const response: Parameters<typeof event.resolve>[0] = {
+          cwd: input.cwd as string,
+          launchExecutable: input.executable as string,
+          version: latestVersion,
+          redistributables: commonRedistExecutables,
+          launchArguments: "%command%",
+          umu: {
+            umuId: `steam:${appID}`,
+            dllOverrides: winedlls.map((dll) => dll + "=n,b"),
+            protonVersion: "UMU-Proton",
+          },
+        };
+
+        const finalResponse = applySetupOverrides(appID, response, {
+          appID,
+          platform: process.platform,
+          installPath: input.cwd as string,
+          executablePath: input.executable as string,
+          dllOverrides: winedlls.map((dll) => dll + "=n,b"),
+        });
+        return yield* Effect.succeed(finalResponse);
       });
 
-      let winedlls: string[] = [];
-      // Get all dll files in the folder and use those
-      const dllFiles = (yield* Effect.tryPromise({
-        try: async () => await fs.readdir(input.cwd as string),
-        catch: () => []
-      })) as string[];
+      pipe(
+        setupEffect(),
+        Effect.catchAll((error) => {
+          console.error("Error setting up", error);
+          event.fail("Failed to setup");
+          return Effect.fail(error);
+        }),
+        Effect.andThen((res) => event.resolve(res)),
+        Effect.runFork,
+      );
+    },
+  );
 
-      winedlls = dllFiles
-        .filter(file => file.toLowerCase().endsWith('.dll'))
-        .map(file => file.replace(/\.dll$/i, ''));
-
-      // write to the game install cwd a "steamrip-info.json"
-
-      const { title }: { title: string | undefined } = yield* (manifest ? pipe(
-        fetchSteamripHtml(manifest.url as string),
-        Effect.andThen(html => new JSDOM(html)),
-        Effect.andThen(dom => ({ title: dom.window.document.querySelector('.post-title')?.textContent?.trim() })),
-        Effect.catchAll(error => {
-          console.error('Failed to get app details', manifest?.url, error);
-          return Effect.succeed({ title: undefined });
-        })
-      ) : Effect.succeed({ title: undefined }));
-
-      yield* Effect.tryPromise({
-        try: async () => await fs.writeFile(join(input.cwd as string, 'steamrip-info.json'), JSON.stringify({
-          title: title ?? 'unknown',
-        }, null, 2)),
-        catch: () => {
-          console.log('Failed to write steamrip-info.json', join(input.cwd as string, 'steamrip-info.json'));
-          return Effect.succeed(undefined);
-        }
-      });
-
-      const response: Parameters<typeof event.resolve>[0] = {
-        cwd: input.cwd as string,
-        launchExecutable: input.executable as string,
-        version: latestVersion,
-        redistributables: commonRedistExecutables,
-        launchArguments: '%command%',
-        umu: {
-          umuId: `steam:${appID}`,
-          dllOverrides: winedlls.map(dll => dll + '=n,b'),
-          protonVersion: 'UMU-Proton'
-        }
-      };
-
-      const finalResponse = applySetupOverrides(appID, response, {
-        appID,
-        platform: process.platform,
-        installPath: input.cwd as string,
-        executablePath: input.executable as string,
-        dllOverrides: winedlls.map(dll => dll + '=n,b'),
-      });
-      return yield* Effect.succeed(finalResponse);
-    });
-
-    pipe(
-      setupEffect(),
-      Effect.catchAll(error => {
-        console.error("Error setting up", error);
-        event.fail('Failed to setup');
-        return Effect.fail(error);
-      }),
-      Effect.andThen(res => event.resolve(res)),
-      Effect.runFork
-    )
-  });
-
-  addon.on('disconnect', () => {
+  addon.on("disconnect", () => {
     process.exit(0);
-  }); 
-
+  });
 });
 
-BunRuntime.runMain(pipe(
-  program,
-  Effect.provide(addonService)
-));
+BunRuntime.runMain(pipe(program, Effect.provide(addonService)));
