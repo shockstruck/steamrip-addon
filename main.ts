@@ -1096,6 +1096,7 @@ const program = Effect.gen(function* () {
         let commonRedistExecutables: { name: string; path: string }[] = [];
         if (input.runCommonRedist || process.platform === "linux") {
           commonRedistExecutables.push(
+            { name: "dotnet40", path: "winetricks" },
             { name: "dotnet48", path: "winetricks" },
             { name: "vcrun2019", path: "winetricks" },
             { name: "xna40", path: "winetricks" },
