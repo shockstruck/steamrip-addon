@@ -333,7 +333,7 @@ const program = Effect.gen(function* () {
       );
       yield* Effect.sync(() => {
         pipe(
-          refreshSteamripCatalog(false),
+          refreshSteamripCatalog(scraper.catalog.games.length === 0),
           Effect.tap(() =>
             Effect.sync(() =>
               addon.notify({
@@ -407,7 +407,7 @@ const program = Effect.gen(function* () {
 
       if (scraper.catalog.games.length === 0) {
         console.log("Steamrip catalog is empty, refreshing before search...");
-        yield* refreshSteamripCatalog(false);
+        yield* refreshSteamripCatalog(true);
       }
 
       // Find the game with the highest name similarity to the Steam result

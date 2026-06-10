@@ -1,6 +1,6 @@
 import axios, { type AxiosResponse } from "axios";
 import { Effect } from "effect";
-import { headerManager } from "./header-manager";
+import { convertPuppeteerCookies, headerManager } from "./header-manager";
 import { NetworkError } from "./errors";
 import { connectRealBrowser, navigateBrowserPage } from "./services/BaseService";
 
@@ -37,8 +37,32 @@ function applySteamripRequestHeaders(headers: Record<string, string>): Record<st
   };
 }
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function waitForSteamripChallengeToClear(page: any, timeoutMs = 90_000): Promise<string> {
+  const startedAt = Date.now();
+  let lastTitle = "unknown";
+  let lastUrl = page.url?.() ?? "unknown";
+
+  while (Date.now() - startedAt < timeoutMs) {
+    const html = await page.content();
+    if (!isCloudflareChallenge(200, {}, html)) {
+      return html;
+    }
+
+    lastTitle = await page.title().catch(() => lastTitle);
+    lastUrl = page.url?.() ?? lastUrl;
+    await sleep(1_000);
+  }
+
+  const cookieCount = await page.cookies().then((cookies: unknown[]) => cookies.length).catch(() => 0);
+  throw new Error(`Cloudflare challenge page returned while fetching steamrip content (title=${lastTitle}, url=${lastUrl}, browserCookies=${cookieCount})`);
+}
+
 async function fetchSteamripHtmlWithBrowser(url: string): Promise<string> {
-  const { browser, page } = await connectRealBrowser({ headless: true, disableXvfb: true });
+  const hasValidCloudflareCookies = headerManager.hasValidCloudflareHeaders();
+  const headless = hasValidCloudflareCookies;
+  const { browser, page } = await connectRealBrowser({ headless, turnstile: !headless, disableXvfb: true });
 
   try {
     const headerData = headerManager.getHeaders();
@@ -69,11 +93,13 @@ async function fetchSteamripHtmlWithBrowser(url: string): Promise<string> {
       timeout: 60_000,
     });
 
-    const html = await activePage.content();
-    if (isCloudflareChallenge(200, {}, html)) {
-      const title = await activePage.title().catch(() => "unknown");
-      const currentUrl = activePage.url();
-      throw new Error(`Cloudflare challenge page returned while fetching steamrip content (title=${title}, url=${currentUrl}, cookies=${cookies.length})`);
+    const html = await waitForSteamripChallengeToClear(activePage);
+
+    const steamripCookies = await activePage.cookies().then((allCookies: any[]) =>
+      allCookies.filter((cookie) => cookie.domain?.includes("steamrip.com")),
+    ).catch(() => []);
+    if (steamripCookies.length > 0) {
+      await Effect.runPromise(headerManager.setCookies(convertPuppeteerCookies(steamripCookies))).catch(() => undefined);
     }
 
     return html;
@@ -94,7 +120,7 @@ async function fetchSteamripHtmlWithAxios(url: string): Promise<AxiosResponse<st
 
 export function fetchSteamripHtml(url: string): Effect.Effect<string, NetworkError> {
   return Effect.gen(function* () {
-    yield* headerManager.loadHeaders();
+    yield* headerManager.loadHeaders().pipe(Effect.catchAll(() => Effect.void));
 
     const axiosResponse = yield* Effect.tryPromise({
       try: () => fetchSteamripHtmlWithAxios(url),

@@ -176,10 +176,19 @@ export default class Scraper {
       // Clean up expired scrapes
       yield* this.cleanupExpiredScrapesInternal();
       
-      if (!force && this.catalog.lastUpdated > Date.now() - 1000 * 60 * 60 * 24) {
+      if (
+        !force &&
+        this.catalog.games.length > 0 &&
+        this.catalog.lastUpdated > Date.now() - 1000 * 60 * 60 * 24
+      ) {
         return;
       }
       const games = yield* this.scrapeAllLinks();
+      if (games.length === 0) {
+        return yield* Effect.fail(
+          new ScraperError({ error: new Error("Steamrip catalog scrape returned no games") }),
+        );
+      }
       const catalogObject = {
         games: games,
         lastUpdated: Date.now()
