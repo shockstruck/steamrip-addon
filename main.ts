@@ -61,23 +61,19 @@ export class AddonService extends Context.Tag("AddonService")<
 const addonService = Layer.succeed(AddonService, {
   addon: baseAddon,
   stringSimilarity: (a: string, b: string): number => {
-    // Normalize and clean the strings
     const normalize = (str: string): string => {
       return (
         str
           .toLowerCase()
-          // Remove common download-related suffixes
           .replace(/\s+(free\s+)?download.*$/i, "")
-          // Remove version patterns like (v1.2.3), [v1.2.3], etc.
           .replace(/[\(\[\{]v?[\d\.]+[\)\]\}]/gi, "")
-          // Remove year patterns like (2023), [2024], etc.
           .replace(/[\(\[\{]\d{4}[\)\]\}]/g, "")
-          // Remove edition suffixes but keep them for partial matching
           .replace(
             /\s+(premium|deluxe|gold|ultimate|complete|goty|game\s+of\s+the\s+year|enhanced|definitive|remastered|directors?\s+cut)\s+(edition)?/gi,
             "",
           )
-          // Clean up extra whitespace
+          // Collapse punctuation (colons, hyphens, apostrophes, etc.) into spaces
+          .replace(/[^\w\s]/g, " ")
           .replace(/\s+/g, " ")
           .trim()
       );
@@ -86,14 +82,23 @@ const addonService = Layer.succeed(AddonService, {
     const cleanA = normalize(a);
     const cleanB = normalize(b);
 
-    // Return early for exact equality after normalization
     if (cleanA === cleanB) return 1;
 
-    // Split into words for word-level matching
     const wordsA = cleanA.split(/\s+/).filter((word) => word.length > 0);
     const wordsB = cleanB.split(/\s+/).filter((word) => word.length > 0);
 
     if (wordsA.length === 0 || wordsB.length === 0) return 0;
+
+    // Standalone digits or roman numerals that act as sequel/version identifiers
+    const romanNumerals = new Set([
+      "i", "ii", "iii", "iv", "v", "vi", "vii", "viii", "ix", "x",
+      "xi", "xii", "xiii", "xiv", "xv",
+    ]);
+    const isSequenceWord = (w: string) =>
+      /^\d+$/.test(w) || romanNumerals.has(w);
+
+    const numbersA = wordsA.filter(isSequenceWord);
+    const numbersB = wordsB.filter(isSequenceWord);
 
     // Calculate word-level similarity
     let exactMatches = 0;
@@ -109,7 +114,6 @@ const addonService = Layer.succeed(AddonService, {
 
         const wordB = wordsB[i];
 
-        // Exact word match
         if (wordA === wordB) {
           exactMatches++;
           usedWordsB.add(i);
@@ -117,7 +121,6 @@ const addonService = Layer.succeed(AddonService, {
           break;
         }
 
-        // Partial word match using character overlap
         const overlap = calculateCharacterOverlap(wordA, wordB);
         if (overlap > bestMatch && overlap > 0.6) {
           bestMatch = overlap;
@@ -125,7 +128,6 @@ const addonService = Layer.succeed(AddonService, {
         }
       }
 
-      // If we found a good partial match and haven't used exact match
       if (
         bestMatchIndex !== -1 &&
         !usedWordsB.has(bestMatchIndex) &&
@@ -136,13 +138,63 @@ const addonService = Layer.succeed(AddonService, {
       }
     }
 
-    // Calculate similarity score
-    // Give more weight to exact matches, some weight to partial matches
     const totalWords = Math.max(wordsA.length, wordsB.length);
     const exactScore = exactMatches / totalWords;
     const partialScore = (partialMatches * 0.7) / totalWords;
+    const rawScore = Math.min(1, exactScore + partialScore);
 
-    return Math.min(1, exactScore + partialScore);
+    // Sequel/version number guard: if both titles carry a sequence word (digit
+    // or roman numeral) and they differ, they are different entries entirely.
+    if (numbersA.length > 0 && numbersB.length > 0) {
+      const hasMatchingNumber = numbersA.some((n) => numbersB.includes(n));
+      if (!hasMatchingNumber) return 0;
+    }
+
+    // If only one title carries a sequence number and the base titles are
+    // otherwise very similar, apply a moderate penalty (e.g. "Portal" vs
+    // "Portal 2", "Baldur's Gate" vs "Baldur's Gate 3").
+    if ((numbersA.length > 0) !== (numbersB.length > 0) && rawScore > 0.5) {
+      return rawScore * 0.65;
+    }
+
+    // Bidirectional keyword coverage check: both titles must share at least
+    // 60 % of their meaningful words. This prevents short catalog entries
+    // ("Doom") from matching longer titles ("Doom Eternal"), and prevents
+    // titles that only share stop-words from matching at all.
+    const stopWords = new Set([
+      "the", "a", "an", "of", "in", "on", "at", "to", "for",
+      "and", "or", "with", "by", "is", "it",
+    ]);
+    // Include single-char digits and roman numerals even though they are short,
+    // because they are meaningful differentiators.
+    const keyWords = (words: string[]) =>
+      words.filter(
+        (w) =>
+          !stopWords.has(w) &&
+          (w.length > 1 || /^\d+$/.test(w) || romanNumerals.has(w)),
+      );
+
+    const keyA = keyWords(wordsA);
+    const keyB = keyWords(wordsB);
+
+    const countMatched = (source: string[], target: string[]) =>
+      source.filter((kw) =>
+        target.some(
+          (tw) => tw === kw || calculateCharacterOverlap(kw, tw) > 0.6,
+        ),
+      ).length;
+
+    if (keyA.length >= 2 && keyB.length >= 1) {
+      const coverageA = countMatched(keyA, keyB) / keyA.length;
+      if (coverageA < 0.6) return rawScore * 0.5;
+    }
+
+    if (keyB.length >= 2 && keyA.length >= 1) {
+      const coverageB = countMatched(keyB, keyA) / keyB.length;
+      if (coverageB < 0.6) return rawScore * 0.5;
+    }
+
+    return rawScore;
 
     function calculateCharacterOverlap(str1: string, str2: string): number {
       if (str1.length < 2 || str2.length < 2) return str1 === str2 ? 1 : 0;
@@ -422,7 +474,7 @@ const program = Effect.gen(function* () {
       }
 
       // Require a minimum similarity to consider it a valid match
-      const SIMILARITY_THRESHOLD = 0.4;
+      const SIMILARITY_THRESHOLD = 0.6;
       console.log("Best score", bestScore);
       const game = bestScore >= SIMILARITY_THRESHOLD ? bestMatch : undefined;
 
