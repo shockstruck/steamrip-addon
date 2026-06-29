@@ -1,5 +1,5 @@
 import { DLService } from "./BaseService";
-import { Effect } from "effect";
+import { Effect, pipe } from "effect";
 import { GofilePasswordRequiredError, GofileScrapeError } from "../errors";
 import type { EventResponse, SearchResult } from "ogi-addon";
 
@@ -62,7 +62,7 @@ const MAX_CONCURRENT_DOWNLOADS_CAP = 10;
 // ---------------------------------------------------------------------------
 
 const MAX_RETRIES = parseIntEnv("GF_MAX_RETRIES", 5);
-const REQUEST_TIMEOUT_S = parseFloatEnv("GF_TIMEOUT", 15);
+const REQUEST_TIMEOUT_S = parseFloatEnv("GF_TIMEOUT", 5);
 const REQUEST_TIMEOUT_MS = REQUEST_TIMEOUT_S * 1000;
 const CHUNK_SIZE = parseIntEnv("GF_CHUNK_SIZE", 2097152); // 2 MiB
 const MAX_CONCURRENT_DOWNLOADS = Math.min(
@@ -221,15 +221,21 @@ export default class GofileService extends DLService {
     GofileDownloadLink[],
     GofilePasswordRequiredError | GofileScrapeError
   > {
-    return Effect.gen(function* (this: GofileService) {
+    return Effect.gen(function*(this: GofileService) {
+      // test if even able to connect to gofile's servers
+      yield* pipe(
+        this.fetchWithRetries(`${GOFILE_API}`, { method: "GET" }),
+        Effect.catchAll(() => Effect.fail(new GofileScrapeError({ url: GOFILE_API, error: new Error("Failed to connect to GoFile API, user seems blocked.") }))),
+      );
+
       const contentId = yield* this.extractContentId(url);
       yield* this.setAccountAccessToken(process.env.GF_TOKEN);
 
       const hashedPassword = password
         ? yield* Effect.tryPromise({
-            try: () => sha256Hex(password),
-            catch: (error) => new GofileScrapeError({ url, error }),
-          })
+          try: () => sha256Hex(password),
+          catch: (error) => new GofileScrapeError({ url, error }),
+        })
         : undefined;
 
       const files: GofileDownloadLink[] = [];
@@ -282,7 +288,7 @@ export default class GofileService extends DLService {
   private setAccountAccessToken(
     token?: string,
   ): Effect.Effect<void, GofileScrapeError> {
-    return Effect.gen(function* (this: GofileService) {
+    return Effect.gen(function*(this: GofileService) {
       if (token) {
         this.authToken = token;
         return;
@@ -355,7 +361,7 @@ export default class GofileService extends DLService {
     url: string,
     init: RequestInit,
   ): Effect.Effect<Response | null, never> {
-    return Effect.gen(function* () {
+    return Effect.gen(function*() {
       for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
         const response = yield* Effect.tryPromise({
           try: () =>
@@ -403,7 +409,7 @@ export default class GofileService extends DLService {
     originalUrl: string,
     hashedPassword?: string,
   ): Effect.Effect<GofileApiResponse, GofilePasswordRequiredError | GofileScrapeError> {
-    return Effect.gen(function* (this: GofileService) {
+    return Effect.gen(function*(this: GofileService) {
       let apiUrl = `${GOFILE_API}/contents/${contentId}?cache=true&sortField=createTime&sortDirection=1`;
 
       if (hashedPassword) {
@@ -489,7 +495,7 @@ export default class GofileService extends DLService {
     hashedPassword?: string,
     isRootContent = false,
   ): Effect.Effect<void, GofilePasswordRequiredError | GofileScrapeError> {
-    return Effect.gen(function* (this: GofileService) {
+    return Effect.gen(function*(this: GofileService) {
       const data = yield* this.fetchContents(contentId, originalUrl, hashedPassword);
 
       if (
