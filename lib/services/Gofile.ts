@@ -2,17 +2,21 @@ import { DLService } from "./BaseService";
 import { Effect } from "effect";
 import { GofilePasswordRequiredError, GofileScrapeError } from "../errors";
 import type { EventResponse, SearchResult } from "ogi-addon";
-import { join } from "path";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
 
 interface GofileApiResponse {
   status: string;
   data: {
     token?: string;
     id?: string;
-    type?: string;
+    type?: "file" | "folder" | string;
     name?: string;
     link?: string;
     children?: Record<string, GofileContent>;
+    // present when the content is password protected
     password?: string;
     passwordStatus?: string;
   };
@@ -20,7 +24,7 @@ interface GofileApiResponse {
 
 interface GofileContent {
   id: string;
-  type: "file" | "folder";
+  type: "file" | "folder" | string;
   name: string;
   link?: string;
 }
@@ -31,16 +35,65 @@ export type GofileDownloadLink = {
   headers: Record<string, string>;
 };
 
+// ---------------------------------------------------------------------------
+// Constants (matching the upstream ltsdw/gofile-downloader Python script)
+// ---------------------------------------------------------------------------
+
 const GOFILE_ORIGIN = "https://gofile.io";
 const GOFILE_API = "https://api.gofile.io";
-const WEBSITE_TOKEN_SALT = "g4f8fd9f12h14g";
+
+/**
+ * Salt used in the dynamic `X-Website-Token` SHA-256 hash.
+ * MUST match the Python's `generate_website_token` exactly:
+ *   sha256("{user_agent}::en-US::{account_token}::{time_slot}::9844d94d963d30")
+ * where `time_slot = floor(unix_time / 14400)`.
+ */
+const WEBSITE_TOKEN_SALT = "9844d94d963d30";
 const DEFAULT_USER_AGENT = "Mozilla/5.0";
-const MAX_RETRIES = Number.parseInt(process.env.GF_MAX_RETRIES ?? "5", 10);
-const REQUEST_TIMEOUT_MS = Number.parseFloat(process.env.GF_TIMEOUT ?? "15") * 1000;
+
+/** Default folder name that the GoFile API auto-creates; we skip it. */
+const DEFAULT_ROOT_FOLDER_NAME = "root";
+
+/** Upper bound enforced by the upstream script: never exceed 10 workers. */
+const MAX_CONCURRENT_DOWNLOADS_CAP = 10;
+
+// ---------------------------------------------------------------------------
+// Env-var configuration (all `GF_*`, matching the upstream script)
+// ---------------------------------------------------------------------------
+
+const MAX_RETRIES = parseIntEnv("GF_MAX_RETRIES", 5);
+const REQUEST_TIMEOUT_S = parseFloatEnv("GF_TIMEOUT", 15);
+const REQUEST_TIMEOUT_MS = REQUEST_TIMEOUT_S * 1000;
+const CHUNK_SIZE = parseIntEnv("GF_CHUNK_SIZE", 2097152); // 2 MiB
+const MAX_CONCURRENT_DOWNLOADS = Math.min(
+  parseIntEnv("GF_MAX_CONCURRENT_DOWNLOADS", 5),
+  MAX_CONCURRENT_DOWNLOADS_CAP,
+);
+// GF_DOWNLOAD_DIR is forwarded to the downstream OGI host via the
+// X-OGI-Download-Dir header so it can write the files in the right place.
+const DOWNLOAD_DIR = process.env.GF_DOWNLOAD_DIR ?? "";
+
+function parseIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function parseFloatEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw === "") return fallback;
+  const parsed = Number.parseFloat(raw);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
 
 function getUserAgent(): string {
   return process.env.GF_USERAGENT ?? DEFAULT_USER_AGENT;
 }
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 function getSessionHeaders(authToken?: string): Record<string, string> {
   const headers: Record<string, string> = {
@@ -69,26 +122,65 @@ async function sha256Hex(input: string): Promise<string> {
 }
 
 /**
- * Matches gofile-downloader `generate_website_token`:
- * sha256(f"{user_agent}::en-US::{account_token}::{time_slot}::{salt}")
- * where time_slot = floor(unix_time / 14400).
+ * Generates the dynamic `X-Website-Token` required by the GoFile API.
+ *
+ * Mirrors the upstream `generate_website_token`:
+ *   sha256(f"{user_agent}::en-US::{account_token}::{time_slot}::9844d94d963d30")
+ *   where time_slot = floor(unix_time / 14400)  (a 4-hour window)
+ *
+ * Exposed for testing — the service uses the same formula internally.
  */
-async function generateWebsiteToken(
+export async function generateWebsiteToken(
   userAgent: string,
   accountToken: string,
+  nowSeconds: number = Math.floor(Date.now() / 1000),
 ): Promise<string> {
-  const timeSlot = Math.floor(Math.floor(Date.now() / 1000) / 14400);
+  const timeSlot = Math.floor(nowSeconds / 14400);
   const raw = `${userAgent}::en-US::${accountToken}::${timeSlot}::${WEBSITE_TOKEN_SALT}`;
   return sha256Hex(raw);
 }
 
-function resolveNamingCollision(
+/**
+ * Sanitises a single path segment the way the upstream Python script does:
+ *   - replace path separators with `_`
+ *   - strip ASCII control characters
+ *   - strip characters illegal on Windows (`<>:"/\\|?*`)
+ *   - strip leading/trailing whitespace and dots
+ *   - collapse the segment to a non-empty fallback when nothing remains
+ */
+export function sanitizePathSegment(name: string): string {
+  let sanitized = name
+    .replace(/[/\\]/g, "_")
+    .replace(/[\x00-\x1f\x7f]/g, "")
+    .replace(/[<>:"/\\|?*]/g, "_")
+    .trim()
+    .replace(/^\.+/, "")
+    .replace(/\.+$/, "")
+    .trim();
+
+  if (!sanitized) {
+    sanitized = "unnamed";
+  }
+
+  return sanitized;
+}
+
+/**
+ * Returns a unique path under `parentPath` for `childName`, appending
+ * ` (N)` (or ` (N)` before the extension for files) on collision. This
+ * matches the upstream `_resolve_naming_collision` helper.
+ */
+export function resolveNamingCollision(
   pathingCount: Map<string, number>,
   parentPath: string,
   childName: string,
   isDir = false,
 ): string {
-  const filepath = join(parentPath, childName).replace(/\\/g, "/");
+  const sanitizedChild = sanitizePathSegment(childName);
+  const safeParent = parentPath.replace(/\\/g, "/").replace(/\/+$/, "");
+  const filepath = safeParent
+    ? `${safeParent}/${sanitizedChild}`
+    : sanitizedChild;
 
   const count = pathingCount.get(filepath) ?? 0;
   pathingCount.set(filepath, count + 1);
@@ -101,13 +193,18 @@ function resolveNamingCollision(
     return `${filepath}(${count})`;
   }
 
-  const dotIndex = filepath.lastIndexOf(".");
-  if (dotIndex === -1) {
+  const dotIndex = sanitizedChild.lastIndexOf(".");
+  if (dotIndex <= 0) {
+    // no extension (or hidden file with no stem) — append at the end
     return `${filepath}(${count})`;
   }
 
-  return `${filepath.slice(0, dotIndex)}(${count})${filepath.slice(dotIndex)}`;
+  return `${safeParent}/${sanitizedChild.slice(0, dotIndex)}(${count})${sanitizedChild.slice(dotIndex)}`;
 }
+
+// ---------------------------------------------------------------------------
+// Service
+// ---------------------------------------------------------------------------
 
 export default class GofileService extends DLService {
   private authToken: string | null = null;
@@ -141,7 +238,6 @@ export default class GofileService extends DLService {
       yield* this.buildContentTree(
         "",
         contentId,
-        contentId,
         url,
         files,
         pathingCount,
@@ -153,10 +249,14 @@ export default class GofileService extends DLService {
     }.bind(this));
   }
 
+  // -------------------------------------------------------------------------
+  // URL parsing — must contain `/d/` per the upstream contract
+  // -------------------------------------------------------------------------
+
   private extractContentId(url: string): Effect.Effect<string, GofileScrapeError> {
     return Effect.try({
       try: () => {
-        const urlParts = url.split("/");
+        const urlParts = url.split("/").filter((segment) => segment.length > 0);
         if (urlParts.length < 2 || urlParts[urlParts.length - 2] !== "d") {
           throw new Error(`The url probably doesn't have an id in it: ${url}`);
         }
@@ -166,10 +266,19 @@ export default class GofileService extends DLService {
     });
   }
 
+  // -------------------------------------------------------------------------
+  // Auth
+  // -------------------------------------------------------------------------
+
   private getDownloadHeaders(): Record<string, string> {
     return this.authToken ? getSessionHeaders(this.authToken) : {};
   }
 
+  /**
+   * Mirrors the upstream `Manager._set_account_access_token`. If a token is
+   * supplied (via the `GF_TOKEN` env var) we use it directly; otherwise we
+   * `POST /accounts` to mint a fresh one.
+   */
   private setAccountAccessToken(
     token?: string,
   ): Effect.Effect<void, GofileScrapeError> {
@@ -238,6 +347,10 @@ export default class GofileService extends DLService {
     }.bind(this));
   }
 
+  // -------------------------------------------------------------------------
+  // Network primitives
+  // -------------------------------------------------------------------------
+
   private fetchWithRetries(
     url: string,
     init: RequestInit,
@@ -281,6 +394,10 @@ export default class GofileService extends DLService {
     return Effect.sleep(backoffMs + jitterMs);
   }
 
+  // -------------------------------------------------------------------------
+  // Content tree fetching + walking
+  // -------------------------------------------------------------------------
+
   private fetchContents(
     contentId: string,
     originalUrl: string,
@@ -295,7 +412,6 @@ export default class GofileService extends DLService {
 
       const userAgent = getUserAgent();
       const maxRateLimitRetries = 6;
-      const baseDelayMs = 1000;
 
       for (let attempt = 0; attempt <= maxRateLimitRetries; attempt++) {
         const websiteToken = yield* Effect.tryPromise({
@@ -359,10 +475,14 @@ export default class GofileService extends DLService {
     }.bind(this));
   }
 
+  /**
+   * Recursively walks the content tree starting at `contentId`, registering
+   * every leaf file into `files`. Mirrors the upstream
+   * `_build_content_tree_structure`.
+   */
   private buildContentTree(
     parentPath: string,
     contentId: string,
-    rootContentId: string,
     originalUrl: string,
     files: GofileDownloadLink[],
     pathingCount: Map<string, number>,
@@ -396,11 +516,7 @@ export default class GofileService extends DLService {
           data.data.name || "unknown",
         );
 
-        files.push({
-          name: name.replace(/\\/g, "/"),
-          url: data.data.link,
-          headers: this.getDownloadHeaders(),
-        });
+        files.push(this.buildDownloadLink(name, data.data.link));
         return;
       }
 
@@ -408,10 +524,29 @@ export default class GofileService extends DLService {
 
       if (!isRootContent) {
         const folderName = data.data.name || "folder";
+
+        // Skip the default "root" folder that GoFile auto-creates — its
+        // children belong directly under the parent path, matching the
+        // upstream script's behaviour.
+        if (folderName !== DEFAULT_ROOT_FOLDER_NAME) {
+          folderPath = resolveNamingCollision(
+            pathingCount,
+            parentPath,
+            folderName,
+            true,
+          );
+        }
+      } else if (
+        data.data.name &&
+        data.data.name !== DEFAULT_ROOT_FOLDER_NAME
+      ) {
+        // For the top-level content, mirror the upstream: if the parent dir
+        // already matches the content_id, reuse it. Otherwise create a
+        // folder named after the content (sanitised).
         folderPath = resolveNamingCollision(
           pathingCount,
           parentPath,
-          folderName,
+          data.data.name,
           true,
         );
       }
@@ -426,7 +561,6 @@ export default class GofileService extends DLService {
           yield* this.buildContentTree(
             folderPath,
             child.id,
-            rootContentId,
             originalUrl,
             files,
             pathingCount,
@@ -440,16 +574,41 @@ export default class GofileService extends DLService {
             child.name,
           );
 
-          files.push({
-            name: name.replace(/\\/g, "/"),
-            url: child.link,
-            headers: {
-              ...this.getDownloadHeaders(),
-              'OGI-Parallel-Limit': '1',
-            },
-          });
+          files.push(this.buildDownloadLink(name, child.link));
         }
       }
     }.bind(this));
+  }
+
+  /**
+   * Constructs a `GofileDownloadLink` with the right headers for the
+   * downstream host. The host is expected to honour:
+   *   - `Cookie` / `Authorization` for GoFile authentication
+   *   - `OGI-Parallel-Limit` to throttle concurrent file downloads
+   *   - `Accept-Ranges: bytes` to enable resume on partial transfers
+   *   - `User-Agent` if the host overrides it
+   *   - `OGI-Chunk-Size` to pick a chunk size for resumable transfers
+   *   - `X-OGI-Download-Dir` (only if `GF_DOWNLOAD_DIR` is set) to choose
+   *     the on-disk location
+   */
+  private buildDownloadLink(name: string, link: string): GofileDownloadLink {
+    const headers = this.getDownloadHeaders();
+    const downloadHeaders: Record<string, string> = {
+      ...headers,
+      "User-Agent": getUserAgent(),
+      "Accept-Ranges": "bytes",
+      // Caps parallel workers per the upstream `GF_MAX_CONCURRENT_DOWNLOADS`
+      "OGI-Parallel-Limit": String(MAX_CONCURRENT_DOWNLOADS),
+      // Chunk size for the resume / partial-download logic
+      "OGI-Chunk-Size": String(CHUNK_SIZE),
+    };
+    if (DOWNLOAD_DIR) {
+      downloadHeaders["X-OGI-Download-Dir"] = DOWNLOAD_DIR;
+    }
+    return {
+      name,
+      url: link,
+      headers: downloadHeaders,
+    };
   }
 }
