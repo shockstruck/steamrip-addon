@@ -2,7 +2,6 @@ import { DLService } from "./BaseService";
 import { Effect } from "effect";
 import { GofilePasswordRequiredError, GofileScrapeError } from "../errors";
 import type { EventResponse, SearchResult } from "ogi-addon";
-import { join } from "path";
 
 interface GofileApiResponse {
   status: string;
@@ -33,10 +32,15 @@ export type GofileDownloadLink = {
 
 const GOFILE_ORIGIN = "https://gofile.io";
 const GOFILE_API = "https://api.gofile.io";
-const WEBSITE_TOKEN_SALT = "g4f8fd9f12h14g";
+// Salt used in the dynamic X-Website-Token SHA-256 hash, matching
+// ltsdw/gofile-downloader's `generate_website_token` exactly.
+const WEBSITE_TOKEN_SALT = "9844d94d963d30";
 const DEFAULT_USER_AGENT = "Mozilla/5.0";
 const MAX_RETRIES = Number.parseInt(process.env.GF_MAX_RETRIES ?? "5", 10);
 const REQUEST_TIMEOUT_MS = Number.parseFloat(process.env.GF_TIMEOUT ?? "15") * 1000;
+// GF_DOWNLOAD_DIR is forwarded to the OGI host so it writes files in the right
+// place — the service itself doesn't perform downloads.
+const DOWNLOAD_DIR = process.env.GF_DOWNLOAD_DIR ?? "";
 
 function getUserAgent(): string {
   return process.env.GF_USERAGENT ?? DEFAULT_USER_AGENT;
@@ -60,6 +64,22 @@ function getSessionHeaders(authToken?: string): Record<string, string> {
   return headers;
 }
 
+/**
+ * Headers attached to every file entry that tell the OGI host how to actually
+ * fetch the file. The service itself does not perform downloads.
+ *   - X-OGI-Download-Dir: where the file should land (from GF_DOWNLOAD_DIR)
+ *   - OGI-Parallel-Limit: 1 — gofile disallows parallel connections per file
+ */
+function downloadRoutingHeaders(): Record<string, string> {
+  const headers: Record<string, string> = {
+    "OGI-Parallel-Limit": "1",
+  };
+  if (DOWNLOAD_DIR) {
+    headers["X-OGI-Download-Dir"] = DOWNLOAD_DIR;
+  }
+  return headers;
+}
+
 async function sha256Hex(input: string): Promise<string> {
   const data = new TextEncoder().encode(input);
   const hashBuffer = await crypto.subtle.digest("SHA-256", data);
@@ -72,23 +92,56 @@ async function sha256Hex(input: string): Promise<string> {
  * Matches gofile-downloader `generate_website_token`:
  * sha256(f"{user_agent}::en-US::{account_token}::{time_slot}::{salt}")
  * where time_slot = floor(unix_time / 14400).
+ *
+ * The optional `nowSeconds` parameter is exposed for tests; production
+ * callers should leave it unset so the real current time is used.
  */
-async function generateWebsiteToken(
+export async function generateWebsiteToken(
   userAgent: string,
   accountToken: string,
+  nowSeconds: number = Math.floor(Date.now() / 1000),
 ): Promise<string> {
-  const timeSlot = Math.floor(Math.floor(Date.now() / 1000) / 14400);
+  const timeSlot = Math.floor(nowSeconds / 14400);
   const raw = `${userAgent}::en-US::${accountToken}::${timeSlot}::${WEBSITE_TOKEN_SALT}`;
   return sha256Hex(raw);
 }
 
-function resolveNamingCollision(
+/**
+ * Sanitises a single path segment the way the upstream Python script does:
+ *   - replace path separators with `_`
+ *   - strip ASCII control characters
+ *   - strip characters illegal on Windows (`<>:"/\|?*`)
+ *   - strip leading/trailing whitespace and dots
+ *   - fall back to `unnamed` when the result would be empty
+ */
+export function sanitizePathSegment(name: string): string {
+  let sanitized = name
+    .replace(/[/\\]/g, "_")
+    .replace(/[\x00-\x1f\x7f]/g, "")
+    .replace(/[<>:"/\\|?*]/g, "_")
+    .trim()
+    .replace(/^\.+/, "")
+    .replace(/\.+$/, "")
+    .trim();
+
+  if (!sanitized) {
+    sanitized = "unnamed";
+  }
+
+  return sanitized;
+}
+
+export function resolveNamingCollision(
   pathingCount: Map<string, number>,
   parentPath: string,
   childName: string,
   isDir = false,
 ): string {
-  const filepath = join(parentPath, childName).replace(/\\/g, "/");
+  const sanitizedChild = sanitizePathSegment(childName);
+  const safeParent = parentPath.replace(/\\/g, "/").replace(/\/+$/, "");
+  const filepath = safeParent
+    ? `${safeParent}/${sanitizedChild}`
+    : sanitizedChild;
 
   const count = pathingCount.get(filepath) ?? 0;
   pathingCount.set(filepath, count + 1);
@@ -101,12 +154,12 @@ function resolveNamingCollision(
     return `${filepath}(${count})`;
   }
 
-  const dotIndex = filepath.lastIndexOf(".");
-  if (dotIndex === -1) {
+  const dotIndex = sanitizedChild.lastIndexOf(".");
+  if (dotIndex <= 0) {
     return `${filepath}(${count})`;
   }
 
-  return `${filepath.slice(0, dotIndex)}(${count})${filepath.slice(dotIndex)}`;
+  return `${safeParent}/${sanitizedChild.slice(0, dotIndex)}(${count})${sanitizedChild.slice(dotIndex)}`;
 }
 
 export default class GofileService extends DLService {
@@ -156,7 +209,7 @@ export default class GofileService extends DLService {
   private extractContentId(url: string): Effect.Effect<string, GofileScrapeError> {
     return Effect.try({
       try: () => {
-        const urlParts = url.split("/");
+        const urlParts = url.split("/").filter((segment) => segment.length > 0);
         if (urlParts.length < 2 || urlParts[urlParts.length - 2] !== "d") {
           throw new Error(`The url probably doesn't have an id in it: ${url}`);
         }
@@ -399,7 +452,10 @@ export default class GofileService extends DLService {
         files.push({
           name: name.replace(/\\/g, "/"),
           url: data.data.link,
-          headers: this.getDownloadHeaders(),
+          headers: {
+            ...this.getDownloadHeaders(),
+            ...downloadRoutingHeaders(),
+          },
         });
         return;
       }
@@ -445,7 +501,7 @@ export default class GofileService extends DLService {
             url: child.link,
             headers: {
               ...this.getDownloadHeaders(),
-              'OGI-Parallel-Limit': '1',
+              ...downloadRoutingHeaders(),
             },
           });
         }
