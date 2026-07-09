@@ -35,10 +35,10 @@ import * as fs from "fs/promises";
 import { existsSync, type Stats } from "fs";
 import axios from "axios";
 import { Stream } from "stream";
-import { cloudflareSolve, CloudflareTestError } from "./lib/cloudflare";
+import { cloudflareSolve } from "./lib/cloudflare";
 import { headerManager } from "./lib/header-manager";
 import { fetchSteamripHtml } from "./lib/steamrip-fetch";
-import { PUPPETEER_OPTIONS } from "./lib/services/BaseService";
+import { connectRealBrowser, PUPPETEER_OPTIONS } from "./lib/services/BaseService";
 import { applySetupOverrides } from "./lib/app-overrides";
 
 const baseAddon = new OGIAddon({
@@ -195,11 +195,77 @@ const program = Effect.gen(function* () {
         );
         console.log("CHROME_PATH set to", process.env.CHROME_PATH);
       }
-      // Avoid launching Chrome during connect. Cloudflare/browser work is performed by
-      // the background catalog refresh or by the first uncached search instead.
+
       process.env.PUPPETEER_PROTOCOL_TIMEOUT = String(
         PUPPETEER_OPTIONS.protocolTimeout || 180000,
       );
+
+      yield* Effect.sync(() => task.log("Checking browser availability..."));
+      const chromeInstalled = yield* Effect.tryPromise(() =>
+        connectRealBrowser({ headless: true, disableXvfb: true }),
+      ).pipe(
+        Effect.catchAll((err) => {
+          console.log("Browser check failed:", err);
+          return Effect.succeed(undefined);
+        }),
+      );
+
+      if (!chromeInstalled) {
+        yield* Effect.sync(() =>
+          task.log(
+            "Chrome/Chromium is not installed on the device. Please install it and try again.",
+          ),
+        );
+        yield* Effect.sync(() =>
+          addon.notify({
+            message:
+              "Steamrip requires Chrome/Chromium to be installed on the device for accessing Steamrip.com",
+            id: "str-chrome-not-installed",
+            type: "error",
+          }),
+        );
+
+        yield* Effect.promise(async () =>
+          event.askForInput(
+            "(1/3) Chrome/Chromium is not installed",
+            "Steamrip Addon requires Chrome/Chromium to be installed on the device for accessing Steamrip.com",
+            new ConfigurationBuilder(),
+          ),
+        );
+
+        if (process.platform === "linux") {
+          yield* Effect.promise(async () =>
+            event.askForInput(
+              "(2/3) Chrome/Chromium is not installed",
+              "Because you are on Linux, download the Flatpak version of Chromium from Discover or the CLI using flatpak install flathub org.chromium.Chromium",
+              new ConfigurationBuilder(),
+            ),
+          );
+        } else {
+          yield* Effect.promise(async () =>
+            event.askForInput(
+              "(2/3) Chrome/Chromium is not installed",
+              "Because you are on Windows, download the Chrome browser from the official website and install it.",
+              new ConfigurationBuilder(),
+            ),
+          );
+        }
+
+        yield* Effect.promise(async () =>
+          event.askForInput(
+            "(3/3) Chrome/Chromium is not installed",
+            "Once you have installed it, please restart the addon server and try again.",
+            new ConfigurationBuilder(),
+          ),
+        );
+
+        yield* Effect.sync(() => task.complete());
+        return;
+      }
+
+      yield* Effect.sync(() => task.log("Chrome is installed on the device."));
+      yield* Effect.promise(async () => chromeInstalled.browser.close());
+
       yield* Effect.sync(() => task.log("Loading cached Steamrip catalog..."));
       const loadedCachedCatalog = yield* scraper.processLocalsIfPresent();
       if (loadedCachedCatalog) {
