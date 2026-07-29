@@ -30,7 +30,7 @@ import {
   SteamSearchError,
 } from "./lib/errors";
 import { dirname, join, relative } from "path";
-import { spawnSync, execSync, spawn } from "child_process";
+import { spawnSync, execSync } from "child_process";
 import * as fs from "fs/promises";
 import { existsSync, type Stats } from "fs";
 import axios from "axios";
@@ -40,6 +40,7 @@ import { headerManager } from "./lib/header-manager";
 import { fetchSteamripHtml } from "./lib/steamrip-fetch";
 import { connectRealBrowser, PUPPETEER_OPTIONS } from "./lib/services/BaseService";
 import { applySetupOverrides } from "./lib/app-overrides";
+import { extractRar } from "./lib/archive";
 
 const baseAddon = new OGIAddon({
   name: "Steamrip Tool",
@@ -691,12 +692,14 @@ const program = Effect.gen(function* () {
         const file = multiPartFiles?.[0];
         if (!file) return yield* Effect.fail(new NoFileFoundError());
 
-        const showErrorScreen = async () => {
+        const showErrorScreen = async (details?: string) => {
           await event.askForInput(
-            "Error",
-            "Oops! It seems like this game wans't downloaded correctly. Go to the path: \"" +
+            "Archive extraction failed",
+            "The download may be incomplete, or the installed RAR extractor may not support this archive." +
+              (details ? ` Extractor details: ${details}` : "") +
+              " Go to the path: \"" +
               path +
-              '" and delete the file to try again. It is likely that this game is hosted on a service that is not currently working. Stay subscribed to the thread to get notified when it is fixed.',
+              '" and delete the archive before trying the download again.',
             new ConfigurationBuilder(),
           );
         };
@@ -763,44 +766,32 @@ const program = Effect.gen(function* () {
         ) {
           // use 'unrar' instead of 7z
           const result = yield* Effect.tryPromise({
-            try: () =>
-              new Promise<{ error?: Error; status: number }>((resolve) => {
-                const child = spawn(
-                  "unrar",
-                  [
-                    "x", // extract with full paths
-                    join(path, file.name), // input archive
-                    `${path}`, // output directory
-                    "-y", // say yes to all prompts
-                  ],
-                  { stdio: "ignore" },
-                );
-
-                child.on("error", (error) => {
-                  resolve({ error, status: 1 });
-                });
-
-                child.on("close", (code) => {
-                  resolve({ status: code ?? 1 });
-                });
-              }),
+            try: () => extractRar(join(path, file.name), path),
             catch: (error) => ({ error: error as Error, status: 1 }),
           });
           if (result.error) {
             console.error("Error extracting archive", result);
             console.error("Error extracting archive", result.error);
-            yield* Effect.promise(async () => showErrorScreen());
+            yield* Effect.promise(async () =>
+              showErrorScreen(result.error?.message),
+            );
             return yield* Effect.fail(
               new RarExtractionError({ path, error: result.error.message }),
             );
           }
           if (result.status !== 0) {
             console.error("Error extracting archive", result.status);
-            yield* Effect.promise(async () => showErrorScreen());
+            console.error("Extractor output", result.output);
+            const extractionError =
+              result.output ||
+              `unrar extraction failed with code ${result.status}`;
+            yield* Effect.promise(async () =>
+              showErrorScreen(extractionError.slice(-1000)),
+            );
             return yield* Effect.fail(
               new RarExtractionError({
                 path,
-                error: `unrar extraction failed with code ${result.status}`,
+                error: extractionError,
               }),
             );
           }
