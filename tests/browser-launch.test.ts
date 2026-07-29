@@ -3,6 +3,7 @@ import {
   isBlankBrowserPageUrl,
   normalizeBrowserArgs,
   pickPrimaryBrowserPage,
+  resolveBrowserExecutablePath,
   type BrowserPageLike,
 } from "../lib/services/BaseService";
 
@@ -51,5 +52,28 @@ describe("browser launch helpers", () => {
     const realPage = new FakePage("https://steamrip.com");
 
     expect(pickPrimaryBrowserPage([blankPage, realPage], blankPage)).toBe(realPage);
+  });
+
+  it("uses a system Chromium binary on Linux ARM instead of Puppeteer's x64 cache", () => {
+    const existing = new Set(["/usr/bin/chromium-browser"]);
+    expect(
+      resolveBrowserExecutablePath(
+        "linux",
+        "arm64",
+        {},
+        path => existing.has(path),
+      ),
+    ).toBe("/usr/bin/chromium-browser");
+  });
+
+  it("prefers an explicitly configured Chrome path", () => {
+    expect(
+      resolveBrowserExecutablePath(
+        "linux",
+        "arm64",
+        { CHROME_PATH: "/custom/chrome" },
+        path => path === "/custom/chrome",
+      ),
+    ).toBe("/custom/chrome");
   });
 });

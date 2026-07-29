@@ -6,6 +6,7 @@ import stealth from "puppeteer-extra-plugin-stealth";
 import adblock from "puppeteer-extra-plugin-adblocker";
 import type { Browser, Page } from "puppeteer";
 import { connect } from "puppeteer-real-browser";
+import { existsSync } from "fs";
 
 // Minimal options used for puppeteer-real-browser connect
 export interface RealBrowserLaunchOptions {
@@ -81,6 +82,27 @@ export function normalizeBrowserArgs(args: string[] = [], options?: { headless?:
 
 function buildBrowserArgs(args: string[] = [], options?: { headless?: boolean }): string[] {
   return normalizeBrowserArgs([...(PUPPETEER_OPTIONS.args ?? []), ...args], options);
+}
+
+export function resolveBrowserExecutablePath(
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+  env: NodeJS.ProcessEnv = process.env,
+  pathExists: (path: string) => boolean = existsSync,
+): string | undefined {
+  const configuredPath = env.CHROME_PATH || env.PUPPETEER_EXECUTABLE_PATH;
+  if (configuredPath && pathExists(configuredPath)) return configuredPath;
+
+  if (platform === "linux" && (arch === "arm64" || arch === "aarch64")) {
+    return [
+      "/usr/bin/chromium-browser",
+      "/usr/bin/chromium",
+      "/usr/bin/google-chrome-stable",
+      "/usr/bin/google-chrome",
+    ].find(pathExists);
+  }
+
+  return undefined;
 }
 
 export function pickPrimaryBrowserPage<TPage extends BrowserPageLike>(
@@ -240,6 +262,8 @@ export async function launchStandardBrowser(
       options?.defaultViewport ?? PUPPETEER_OPTIONS.defaultViewport,
     args: buildBrowserArgs((options?.args as string[] | undefined) ?? [], { headless: headless !== false }),
     protocolTimeout: options?.protocolTimeout ?? PUPPETEER_OPTIONS.protocolTimeout ?? 180000,
+    executablePath:
+      options?.executablePath ?? resolveBrowserExecutablePath(),
   } as LaunchOptions;
 
   const browser = await puppeteer.launch(launchOptions);
