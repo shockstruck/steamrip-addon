@@ -9,9 +9,19 @@ import { BuzzHeavierError, DownloadCatcherError } from "../errors";
 import type { EventResponse, SearchResult } from "ogi-addon";
 import type { Browser, Page } from "puppeteer";
 
+const STEAMRIP_REFERRER = "https://steamrip.com/";
+
+export function getBzzhrNavigationOptions(): Parameters<Page["goto"]>[1] {
+  return {
+    // Bzzhr redirects referrer-less file-page requests back to SteamRIP.
+    referer: STEAMRIP_REFERRER,
+    waitUntil: "domcontentloaded",
+  };
+}
+
 export default class BzzhrService extends DLService {
   public constructor() {
-    super("BZZHR", 1); // Last resort only — prefer Gofile and other hosts first.
+    super("BZZHR", 8); // Prefer Gofile, but rank Bzzhr above lower-priority fallbacks.
   }
 
   scrapeDownloadLinks(
@@ -40,7 +50,7 @@ export default class BzzhrService extends DLService {
         Effect.gen(
           function* (this: BzzhrService) {
             yield* Effect.tryPromise({
-              try: () => page.goto(url),
+              try: () => page.goto(url, getBzzhrNavigationOptions()),
               catch: (error) => new BuzzHeavierError({ url, error }),
             });
 
