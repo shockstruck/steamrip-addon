@@ -2,7 +2,7 @@
   "author": "fat-addons",
   "icon": "favicon.png",
   "scripts": {
-    "preSetup": "bun install --frozen-lockfile",
+    "preSetup": "bun --bun install --frozen-lockfile",
     "run": "bun run main.ts"
   }
 }
