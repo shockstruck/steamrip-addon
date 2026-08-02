@@ -1,7 +1,5 @@
 import {
-  createCdpSessionSafe,
   DLService,
-  PUPPETEER_OPTIONS,
   launchStandardBrowser,
 } from "./BaseService";
 import { Effect, pipe } from "effect";
@@ -49,21 +47,40 @@ export default class BzzhrService extends DLService {
       ({ browser, page }) =>
         Effect.gen(
           function* (this: BzzhrService) {
+            const downloadButtonSelector =
+              '.gay-button[hx-get*="/download"]';
+
             yield* Effect.tryPromise({
-              try: () => page.goto(url, getBzzhrNavigationOptions()),
+              try: async () => {
+                let lastError: unknown;
+                for (let attempt = 0; attempt < 3; attempt++) {
+                  const response = await page.goto(
+                    url,
+                    getBzzhrNavigationOptions(),
+                  );
+                  try {
+                    await page.waitForSelector(downloadButtonSelector, {
+                      timeout: 10_000,
+                    });
+                    return;
+                  } catch (error) {
+                    lastError = new Error(
+                      `BZZHR page unavailable (status ${response?.status() ?? "unknown"}, ${page.url()})`,
+                      { cause: error },
+                    );
+                  }
+                }
+                throw lastError;
+              },
               catch: (error) => new BuzzHeavierError({ url, error }),
             });
 
             yield* Effect.tryPromise({
               try: () =>
                 page.evaluate(() => {
+                  (window as any).AdLink = null;
                   (window as any).adLink = null;
                 }),
-              catch: (error) => new BuzzHeavierError({ url, error }),
-            });
-
-            yield* Effect.tryPromise({
-              try: () => page.waitForSelector(".link-button.gay-button"),
               catch: (error) => new BuzzHeavierError({ url, error }),
             });
 
@@ -77,7 +94,7 @@ export default class BzzhrService extends DLService {
             const findDownloadButton = () =>
               Effect.tryPromise({
                 try: async () => {
-                  const buttons = await page.$$(".gay-button");
+                  const buttons = await page.$$(downloadButtonSelector);
                   for (const button of buttons) {
                     const hxGet = await button.evaluate((el) =>
                       el.getAttribute("hx-get")
@@ -119,7 +136,7 @@ export default class BzzhrService extends DLService {
                   catch: (error) => new BuzzHeavierError({ url, error }),
                 });
                 yield* Effect.tryPromise({
-                  try: () => page.waitForSelector(".link-button.gay-button"),
+                  try: () => page.waitForSelector(downloadButtonSelector),
                   catch: (error) => new BuzzHeavierError({ url, error }),
                 });
                 yield* Effect.tryPromise({
@@ -161,7 +178,7 @@ export default class BzzhrService extends DLService {
                   catch: (error) => new BuzzHeavierError({ url, error }),
                 });
                 yield* Effect.tryPromise({
-                  try: () => page.waitForSelector(".link-button.gay-button"),
+                  try: () => page.waitForSelector(downloadButtonSelector),
                   catch: (error) => new BuzzHeavierError({ url, error }),
                 });
                 yield* Effect.tryPromise({
@@ -188,7 +205,7 @@ export default class BzzhrService extends DLService {
                 catch: (error) => new BuzzHeavierError({ url, error }),
               });
               yield* Effect.tryPromise({
-                try: () => page.waitForSelector(".link-button.gay-button"),
+                try: () => page.waitForSelector(downloadButtonSelector),
                 catch: (error) => new BuzzHeavierError({ url, error }),
               });
               yield* Effect.tryPromise({
@@ -206,47 +223,11 @@ export default class BzzhrService extends DLService {
               );
             }
 
-            // Get the headers from the page context using CDP
-            const headers: Record<string, string> = yield* Effect.tryPromise({
-              try: async () => {
-                const client = await createCdpSessionSafe(mainPage as any);
-                await client.send("Network.enable");
-                let foundHeaders: Record<string, string> = {};
-                // Listen for responseReceived events
-                const handler = (params: any) => {
-                  if (params.response && params.response.url === downloadUrl) {
-                    foundHeaders = params.response.headers || {};
-                  }
-                };
-                client.on("Network.responseReceived", handler);
-
-                // Try to trigger a HEAD request to the downloadUrl to get headers
-                try {
-                  await mainPage.evaluate((url) => {
-                    return fetch(url, {
-                      method: "HEAD",
-                      credentials: "include",
-                    });
-                  }, downloadUrl);
-                } catch {
-                  // ignore
-                }
-
-                // Wait a short time for the event to fire
-                await new Promise((resolve) => setTimeout(resolve, 1000));
-                client.off?.("Network.responseReceived", handler);
-                await client.detach?.();
-                return foundHeaders;
-              },
-              catch: (error) => new BuzzHeavierError({ url, error }),
-            });
-
             return [
               {
                 url: downloadUrl,
                 name: "BUZZHEAVIER",
                 headers: {
-                  ...headers,
                   "OGI-Parallel-Limit": "1",
                 },
               },
