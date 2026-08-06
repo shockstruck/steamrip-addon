@@ -40,7 +40,8 @@ import { headerManager } from "./lib/header-manager";
 import { fetchSteamripHtml } from "./lib/steamrip-fetch";
 import { connectRealBrowser, PUPPETEER_OPTIONS } from "./lib/services/BaseService";
 import { applySetupOverrides } from "./lib/app-overrides";
-import { extractRar } from "./lib/archive";
+import { extractRar, extractWith7Zip } from "./lib/archive";
+import { setEventProgress } from "./lib/event-progress";
 
 const baseAddon = new OGIAddon({
   name: "Steamrip Tool",
@@ -683,6 +684,9 @@ const program = Effect.gen(function* () {
       }
       event.log(`Setup: path: ${path}, multiPartFiles: ${multiPartFiles}`);
       event.defer();
+      const setSetupProgress = (progress: number): void => {
+        setEventProgress(event, progress);
+      };
       const setupEffect = Effect.fn("setupEffect")(function* () {
         const programFiles7zip = join(
           process.env["ProgramFiles"] || "C:\\Program Files",
@@ -743,31 +747,34 @@ const program = Effect.gen(function* () {
             }
           }
         }
-        event.log(
-          "Extracting archive (this may take a while). We recommend to check the folder in " +
-            path +
-            " to see if the extraction is progressing.",
-        );
-        if (process.platform === "win32") {
-          const command = `"${programFiles7zip}" x "${join(path, file.name)}" -o"${path}" -y`;
-          event.log(`Running command: ${command}`);
-          try {
-            execSync(command, { stdio: "inherit" });
-          } catch (error) {
-            console.error("Error extracting archive", error);
-            yield* Effect.promise(async () => showErrorScreen());
-            return yield* Effect.fail(
-              new RarExtractionError({ path, error: (error as Error).message }),
-            );
-          }
-        } else if (
+        event.log("Extracting archive (this may take a while)...");
+        setSetupProgress(0);
+        if (
+          process.platform === "win32" ||
           process.platform === "darwin" ||
           process.platform === "linux"
         ) {
-          // use 'unrar' instead of 7z
+          const archivePath = join(path, file.name);
           const result = yield* Effect.tryPromise({
-            try: () => extractRar(join(path, file.name), path),
-            catch: (error) => ({ error: error as Error, status: 1 }),
+            try: () =>
+              process.platform === "win32"
+                ? extractWith7Zip(
+                    archivePath,
+                    path,
+                    programFiles7zip,
+                    setSetupProgress,
+                  )
+                : extractRar(
+                    archivePath,
+                    path,
+                    "unrar",
+                    setSetupProgress,
+                  ),
+            catch: (error) => ({
+              error: error as Error,
+              status: 1,
+              output: "",
+            }),
           });
           if (result.error) {
             console.error("Error extracting archive", result);
@@ -784,7 +791,7 @@ const program = Effect.gen(function* () {
             console.error("Extractor output", result.output);
             const extractionError =
               result.output ||
-              `unrar extraction failed with code ${result.status}`;
+              `Archive extraction failed with code ${result.status}`;
             yield* Effect.promise(async () =>
               showErrorScreen(extractionError.slice(-1000)),
             );
