@@ -1,10 +1,19 @@
 import { describe, expect, it } from "bun:test";
+import { mkdir, mkdtemp, writeFile } from "fs/promises";
+import { tmpdir } from "os";
 import { join } from "path";
 import { applySetupOverrides } from "../lib/app-overrides";
 
 describe("app setup overrides", () => {
-  it("bypasses MECCHA CHAMELEON's Wine-incompatible prerequisite wrapper", () => {
-    const installPath = "/games/MECCHA CHAMELEON";
+  it("bypasses MECCHA CHAMELEON's Wine-incompatible prerequisite wrapper", async () => {
+    const installPath = await mkdtemp(join(tmpdir(), "meccha-chameleon-"));
+    const gameDirectory = join(installPath, "Chameleon", "Binaries", "Win64");
+    await mkdir(gameDirectory, { recursive: true });
+    await Promise.all([
+      writeFile(join(gameDirectory, "OnlineFix64.dll"), ""),
+      writeFile(join(gameDirectory, "steam_api64.DLL"), ""),
+      writeFile(join(gameDirectory, "PenguinHotel-Win64-Shipping.exe"), ""),
+    ]);
     const wrapperPath = join(installPath, "PenguinHotel.exe");
     const response = {
       cwd: installPath,
@@ -44,16 +53,11 @@ describe("app setup overrides", () => {
         "PenguinHotel-Win64-Shipping.exe",
       ),
     );
-    expect(overridden.cwd).toBe(installPath);
+    expect(overridden.cwd).toBe(gameDirectory);
     expect(overridden.redistributables).toEqual(response.redistributables);
     expect(overridden.umu?.dllOverrides).toEqual([
-      "version=n,b",
-      "OnlineFix64=n",
-      "SteamOverlay64=n",
-      "winmm=n,b",
-      "dnet=n",
-      "steam_api64=n",
-      "winhttp=n,b",
+      "OnlineFix64=n,b",
+      "steam_api64=n,b",
     ]);
   });
 });

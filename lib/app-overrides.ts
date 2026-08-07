@@ -1,4 +1,5 @@
 import type { SetupEventResponse } from "ogi-addon";
+import { readdirSync } from "fs";
 import { join } from "path";
 
 export type SetupOverrideContext = {
@@ -26,37 +27,29 @@ const SETUP_OVERRIDES: SetupOverridesMap = {
   4704690: (context) => {
     if (context.platform !== "linux") return {};
 
-    const authenticationDlls = new Set([
-      "onlinefix64",
-      "steamoverlay64",
-      "winmm",
-      "dnet",
-      "steam_api64",
-      "winhttp",
-    ]);
-    const otherDllOverrides = context.dllOverrides.filter(
-      (entry) => !authenticationDlls.has(entry.split("=")[0].toLowerCase()),
+    const gameDirectory = join(
+      context.installPath,
+      "Chameleon",
+      "Binaries",
+      "Win64",
     );
+    const launchExecutable = join(
+      gameDirectory,
+      "PenguinHotel-Win64-Shipping.exe",
+    );
+    const dllOverrides = readdirSync(gameDirectory, { withFileTypes: true })
+      .filter(
+        (entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".dll"),
+      )
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .map((entry) => `${entry.name.replace(/\.dll$/i, "")}=n,b`);
 
     return {
-      launchExecutable: join(
-        context.installPath,
-        "Chameleon",
-        "Binaries",
-        "Win64",
-        "PenguinHotel-Win64-Shipping.exe",
-      ),
+      cwd: gameDirectory,
+      launchExecutable,
       umu: {
         umuId: `steam:${context.appID}`,
-        dllOverrides: [
-          ...otherDllOverrides,
-          "OnlineFix64=n",
-          "SteamOverlay64=n",
-          "winmm=n,b",
-          "dnet=n",
-          "steam_api64=n",
-          "winhttp=n,b",
-        ],
+        dllOverrides,
       },
     };
   },
