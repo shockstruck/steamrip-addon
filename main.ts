@@ -41,7 +41,6 @@ import { fetchSteamripHtml } from "./lib/steamrip-fetch";
 import { connectRealBrowser, PUPPETEER_OPTIONS } from "./lib/services/BaseService";
 import { applySetupOverrides } from "./lib/app-overrides";
 import { extractRar, extractWith7Zip } from "./lib/archive";
-import { setEventProgress } from "./lib/event-progress";
 
 const baseAddon = new OGIAddon({
   name: "Steamrip Tool",
@@ -684,9 +683,6 @@ const program = Effect.gen(function* () {
       }
       event.log(`Setup: path: ${path}, multiPartFiles: ${multiPartFiles}`);
       event.defer();
-      const setSetupProgress = (progress: number): void => {
-        setEventProgress(event, progress);
-      };
       const setupEffect = Effect.fn("setupEffect")(function* () {
         const programFiles7zip = join(
           process.env["ProgramFiles"] || "C:\\Program Files",
@@ -748,7 +744,7 @@ const program = Effect.gen(function* () {
           }
         }
         event.log("Extracting archive (this may take a while)...");
-        setSetupProgress(0);
+        event.progress = 0;
         if (
           process.platform === "win32" ||
           process.platform === "darwin" ||
@@ -762,13 +758,17 @@ const program = Effect.gen(function* () {
                     archivePath,
                     path,
                     programFiles7zip,
-                    setSetupProgress,
+                    (progress: number) => {
+                      event.progress = progress;
+                    },
                   )
                 : extractRar(
                     archivePath,
                     path,
                     "unrar",
-                    setSetupProgress,
+                    (progress: number) => {
+                      event.progress = progress;
+                    },
                   ),
             catch: (error) => ({
               error: error as Error,
