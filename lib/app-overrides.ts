@@ -21,6 +21,46 @@ type SetupOverridesMap = Record<number, SetupOverrideValue>;
  * Example: override launch arguments for Lossless Scaling (steam app 993090).
  */
 const SETUP_OVERRIDES: SetupOverridesMap = {
+  // MECCHA CHAMELEON's Unreal bootstrapper falsely reports a missing VC++
+  // runtime under Wine. Launch the game binary behind the wrapper instead.
+  4704690: (context) => {
+    if (context.platform !== "linux") return {};
+
+    const authenticationDlls = new Set([
+      "onlinefix64",
+      "steamoverlay64",
+      "winmm",
+      "dnet",
+      "steam_api64",
+      "winhttp",
+    ]);
+    const otherDllOverrides = context.dllOverrides.filter(
+      (entry) => !authenticationDlls.has(entry.split("=")[0].toLowerCase()),
+    );
+
+    return {
+      launchExecutable: join(
+        context.installPath,
+        "Chameleon",
+        "Binaries",
+        "Win64",
+        "PenguinHotel-Win64-Shipping.exe",
+      ),
+      umu: {
+        umuId: `steam:${context.appID}`,
+        dllOverrides: [
+          ...otherDllOverrides,
+          "OnlineFix64=n",
+          "SteamOverlay64=n",
+          "winmm=n,b",
+          "dnet=n",
+          "steam_api64=n",
+          "winhttp=n,b",
+        ],
+      },
+    };
+  },
+
   // Lossless Scaling (steam app 993090)
   993090: (context) =>
     context.platform === "linux"
