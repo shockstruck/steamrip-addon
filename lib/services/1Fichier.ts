@@ -1,4 +1,10 @@
-import { DLService, PUPPETEER_OPTIONS, launchStandardBrowser } from "./BaseService";
+import {
+  DLService,
+  PUPPETEER_OPTIONS,
+  launchStandardBrowser,
+  withSteamripNavigationOptions,
+  withSteamripReferer,
+} from "./BaseService";
 import { Effect } from "effect";
 import { FichierError } from "../errors";
 import type { EventResponse, SearchResult } from "ogi-addon";
@@ -27,7 +33,7 @@ export default class FichierService extends DLService {
         });
 
         yield* Effect.tryPromise({
-          try: () => page.goto(url),
+          try: () => page.goto(url, withSteamripNavigationOptions()),
           catch: (error) => new FichierError({ url, error })
         });
 
@@ -120,7 +126,7 @@ export default class FichierService extends DLService {
           });
           if (href) {
             console.log('found ok button', href);
-            return [{ url: href, name: '1FICHIER', headers: {} }];
+            return [{ url: href, name: '1FICHIER', headers: withSteamripReferer() }];
           }
         }
 

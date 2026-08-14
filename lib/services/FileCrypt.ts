@@ -1,4 +1,4 @@
-import { DLService } from "./BaseService";
+import { DLService, withSteamripReferer } from "./BaseService";
 import { isFilecryptUrl, processFilecryptUrl } from "../filecrypt";
 import { Effect } from "effect";
 import { FileCryptError, FileCryptUrlError } from "../errors";
@@ -38,8 +38,8 @@ export default class FileCryptService extends DLService {
       return [{ 
         name: 'FILECRYPT_REDIRECT', 
         url: finalUrl,
-        headers: {}
+        headers: withSteamripReferer()
       }];
     });
   }
-} 
+}

@@ -4,6 +4,7 @@ import {
   DLService,
   launchStandardBrowser,
   navigateBrowserPage,
+  withSteamripReferer,
 } from "./BaseService";
 import { Effect } from "effect";
 import { MegaDBError, DownloadCatcherError } from "../errors";
@@ -241,7 +242,7 @@ export default class MegaDBService extends DLService {
               {
                 url: downloadUrl,
                 name: "MEGADB",
-                headers,
+                headers: withSteamripReferer(headers),
               },
             ];
           }.bind(this),

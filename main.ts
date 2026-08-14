@@ -38,7 +38,11 @@ import { Stream } from "stream";
 import { cloudflareSolve } from "./lib/cloudflare";
 import { headerManager } from "./lib/header-manager";
 import { fetchSteamripHtml } from "./lib/steamrip-fetch";
-import { connectRealBrowser, PUPPETEER_OPTIONS } from "./lib/services/BaseService";
+import {
+  connectRealBrowser,
+  PUPPETEER_OPTIONS,
+  withSteamripReferer,
+} from "./lib/services/BaseService";
 import { applySetupOverrides } from "./lib/app-overrides";
 import { extractRar, extractWith7Zip } from "./lib/archive";
 
@@ -603,7 +607,7 @@ const program = Effect.gen(function* () {
             return {
               url: downloadUrls[0].url,
               name: downloadUrls[0].name,
-              headers: downloadUrls[0].headers,
+              headers: withSteamripReferer(downloadUrls[0].headers),
             };
           } catch (err) {
             lastError = err;

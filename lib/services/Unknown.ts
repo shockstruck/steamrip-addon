@@ -1,5 +1,11 @@
 
-import { createCdpSessionSafe, DLService, connectRealBrowser, navigateBrowserPage } from "./BaseService";
+import {
+  createCdpSessionSafe,
+  DLService,
+  connectRealBrowser,
+  navigateBrowserPage,
+  withSteamripReferer,
+} from "./BaseService";
 import { Effect } from "effect";
 import { DownloadCatcherError, UnknownServiceError } from "../errors";
 import type { EventResponse, SearchResult } from "ogi-addon";
@@ -212,7 +218,7 @@ export default class UnknownService extends DLService {
             {
               url: downloadUrl,
               name: 'UNKNOWN_SERVICE',
-              headers,
+              headers: withSteamripReferer(headers),
             },
           ];
         }.bind(this)),

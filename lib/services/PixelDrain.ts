@@ -1,4 +1,10 @@
-import { DLService, PUPPETEER_OPTIONS, launchStandardBrowser } from "./BaseService";
+import {
+  DLService,
+  PUPPETEER_OPTIONS,
+  launchStandardBrowser,
+  withSteamripNavigationOptions,
+  withSteamripReferer,
+} from "./BaseService";
 import { Effect } from "effect";
 import { PixelDrainError, DownloadCatcherError } from "../errors";
 import type { EventResponse, SearchResult } from "ogi-addon";
@@ -23,7 +29,7 @@ export default class PixelDrainService extends DLService {
       ({ browser, page }) => Effect.gen(function*(this: PixelDrainService) {
 
         yield* Effect.tryPromise({
-          try: () => page.goto(url),
+          try: () => page.goto(url, withSteamripNavigationOptions()),
           catch: (error) => new PixelDrainError({ url, error })
         });
 
@@ -62,7 +68,7 @@ export default class PixelDrainService extends DLService {
           return yield* Effect.fail(new PixelDrainError({ url, error: 'No download url found' }));
         }
 
-        return [{ name: 'PIXELDRAIN', url: downloadUrl, headers: {} }];
+        return [{ name: 'PIXELDRAIN', url: downloadUrl, headers: withSteamripReferer() }];
       }.bind(this)),
       ({ browser }) => Effect.promise(() => browser.close())
     );

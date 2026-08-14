@@ -1,20 +1,19 @@
 import {
   DLService,
   launchStandardBrowser,
+  withSteamripNavigationOptions,
+  withSteamripReferer,
 } from "./BaseService";
 import { Effect, pipe } from "effect";
 import { BuzzHeavierError, DownloadCatcherError } from "../errors";
 import type { EventResponse, SearchResult } from "ogi-addon";
 import type { Browser, Page } from "puppeteer";
 
-const STEAMRIP_REFERRER = "https://steamrip.com/";
-
 export function getBzzhrNavigationOptions(): Parameters<Page["goto"]>[1] {
-  return {
+  return withSteamripNavigationOptions({
     // Bzzhr redirects referrer-less file-page requests back to SteamRIP.
-    referer: STEAMRIP_REFERRER,
     waitUntil: "domcontentloaded",
-  };
+  });
 }
 
 export default class BzzhrService extends DLService {
@@ -227,9 +226,9 @@ export default class BzzhrService extends DLService {
               {
                 url: downloadUrl,
                 name: "BUZZHEAVIER",
-                headers: {
+                headers: withSteamripReferer({
                   "OGI-Parallel-Limit": "1",
-                },
+                }),
               },
             ];
           }.bind(this)

@@ -1,4 +1,4 @@
-import { DLService } from "./BaseService";
+import { DLService, withSteamripReferer } from "./BaseService";
 import { Effect, pipe } from "effect";
 import { GofilePasswordRequiredError, GofileScrapeError } from "../errors";
 import type { EventResponse, SearchResult } from "ogi-addon";
@@ -614,7 +614,7 @@ export default class GofileService extends DLService {
     return {
       name,
       url: link,
-      headers: downloadHeaders,
+      headers: withSteamripReferer(downloadHeaders),
     };
   }
 }

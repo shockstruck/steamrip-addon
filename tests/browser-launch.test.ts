@@ -1,10 +1,13 @@
 import { describe, expect, it } from "bun:test";
 import {
   isBlankBrowserPageUrl,
+  navigateBrowserPage,
   normalizeBrowserArgs,
   pickPrimaryBrowserPage,
   resolveBrowserExecutablePath,
+  STEAMRIP_REFERER,
   type BrowserPageLike,
+  type NavigablePageLike,
 } from "../lib/services/BaseService";
 
 class FakePage implements BrowserPageLike {
@@ -19,6 +22,28 @@ class FakePage implements BrowserPageLike {
 
   isClosed(): boolean {
     return this.closed;
+  }
+}
+
+class FakeNavigablePage implements NavigablePageLike {
+  private currentUrl = "about:blank";
+  public navigationOptions: Parameters<NavigablePageLike["goto"]>[1];
+
+  url(): string {
+    return this.currentUrl;
+  }
+
+  isClosed(): boolean {
+    return false;
+  }
+
+  async goto(
+    url: string,
+    options?: Parameters<NavigablePageLike["goto"]>[1],
+  ): Promise<unknown> {
+    this.currentUrl = url;
+    this.navigationOptions = options;
+    return undefined;
   }
 }
 
@@ -75,5 +100,21 @@ describe("browser launch helpers", () => {
         path => path === "/custom/chrome",
       ),
     ).toBe("/custom/chrome");
+  });
+
+  it("opens provider pages with SteamRIP as the referer", async () => {
+    const page = new FakeNavigablePage();
+    const browser = {
+      pages: async () => [page],
+    };
+
+    await navigateBrowserPage(browser, page, "https://megadb.example/file", {
+      waitUntil: "domcontentloaded",
+    });
+
+    expect(page.navigationOptions).toMatchObject({
+      referer: STEAMRIP_REFERER,
+      waitUntil: "domcontentloaded",
+    });
   });
 });

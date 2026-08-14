@@ -8,6 +8,30 @@ import type { Browser, Page } from "puppeteer";
 import { connect } from "puppeteer-real-browser";
 import { existsSync } from "fs";
 
+export const STEAMRIP_REFERER = "https://steamrip.com/";
+
+export function withSteamripReferer(
+  headers: Readonly<Record<string, string>> = {},
+): Record<string, string> {
+  const providerHeaders = Object.fromEntries(
+    Object.entries(headers).filter(([name]) => name.toLowerCase() !== "referer"),
+  );
+
+  return {
+    ...providerHeaders,
+    Referer: STEAMRIP_REFERER,
+  };
+}
+
+export function withSteamripNavigationOptions(
+  options: Parameters<Page["goto"]>[1] = {},
+): NonNullable<Parameters<Page["goto"]>[1]> {
+  return {
+    ...options,
+    referer: STEAMRIP_REFERER,
+  };
+}
+
 // Minimal options used for puppeteer-real-browser connect
 export interface RealBrowserLaunchOptions {
   headless?: boolean;
@@ -179,7 +203,7 @@ export async function navigateBrowserPage<TPage extends NavigablePageLike>(
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       await page.bringToFront?.().catch(() => undefined);
-      await page.goto(url, options);
+      await page.goto(url, withSteamripNavigationOptions(options));
 
       const currentUrl = getPageUrl(page);
       if (!isBlankBrowserPageUrl(currentUrl)) {

@@ -2,6 +2,7 @@ import type { Browser, Page } from "puppeteer";
 import { launchStandardBrowser } from "./services/BaseService";
 import { showInfoPopup } from "./popup-utils";
 import { Effect } from "effect";
+import { withSteamripNavigationOptions } from "./services/BaseService";
 import { FileCryptBrowserClosedError, FileCryptRedirectError, FileCryptUrlError, NetworkError } from "./errors";
 import type { PageWithCursor } from "puppeteer-real-browser";
 
@@ -141,7 +142,13 @@ function waitForFilecryptRedirect(page: PageWithCursor | Page, initialUrl: strin
     
     yield* Effect.tryPromise({
       try: async () => {
-        await (page as unknown as { goto: (url: string, opts: any) => Promise<unknown> }).goto(initialUrl, { waitUntil: "networkidle2", timeout: Math.min(timeout, 30000) });
+        await (page as unknown as { goto: (url: string, opts: any) => Promise<unknown> }).goto(
+          initialUrl,
+          withSteamripNavigationOptions({
+            waitUntil: "networkidle2",
+            timeout: Math.min(timeout, 30000),
+          }),
+        );
         return null as unknown;
       },
       catch: () => new FileCryptRedirectError({ url: initialUrl })
