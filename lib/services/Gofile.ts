@@ -45,10 +45,10 @@ const GOFILE_API = "https://api.gofile.io";
 /**
  * Salt used in the dynamic `X-Website-Token` SHA-256 hash.
  * MUST match the Python's `generate_website_token` exactly:
- *   sha256("{user_agent}::en-US::{account_token}::{time_slot}::9844d94d963d30")
+ *   sha256("{user_agent}::en-US::{account_token}::{time_slot}::12af056dacea0b")
  * where `time_slot = floor(unix_time / 14400)`.
  */
-const WEBSITE_TOKEN_SALT = "9844d94d963d30";
+const WEBSITE_TOKEN_SALT = "12af056dacea0b";
 const DEFAULT_USER_AGENT = "Mozilla/5.0";
 
 /** Default folder name that the GoFile API auto-creates; we skip it. */
