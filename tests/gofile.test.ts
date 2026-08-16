@@ -36,7 +36,7 @@ print(hashlib.sha256(raw.encode()).hexdigest())`,
   return result.stdout.toString().trim();
 }
 
-const SALT = "9844d94d963d30";
+const SALT = "12af056dacea0b";
 
 describe("Gofile service parity with ltsdw/gofile-downloader", () => {
   it("website-token formula matches the Python reference implementation", async () => {
@@ -77,16 +77,18 @@ describe("Gofile service parity with ltsdw/gofile-downloader", () => {
     expect(h3).not.toBe(h2);
   });
 
-  it("salt matches the upstream literal '9844d94d963d30'", async () => {
-    // Encoded directly — the time_slot / user-agent is irrelevant, we
-    // just verify the salt is part of the hash.
+  it("salt matches the upstream literal '12af056dacea0b'", async () => {
     const ts = 123800;
     const h = await generateWebsiteToken("Mozilla/5.0", "", ts * 14400);
-    // Recompute the same hash with the documented recipe (including the
-    // literal salt string) and assert equality.
-    const expected = await generateWebsiteToken("Mozilla/5.0", "", ts * 14400);
+    const raw = `Mozilla/5.0::en-US::::${ts}::12af056dacea0b`;
+    const digest = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(raw),
+    );
+    const expected = Array.from(new Uint8Array(digest))
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
     expect(h).toBe(expected);
-    // Sanity: the hash is 64 hex chars
     expect(h).toMatch(/^[0-9a-f]{64}$/);
   });
 
