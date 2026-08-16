@@ -10,6 +10,10 @@ import {
   type HeaderData,
 } from "./header-manager";
 import { connectRealBrowser, navigateBrowserPage, PUPPETEER_OPTIONS } from "./services/BaseService";
+import {
+  getSteamripBrowserLaunchOptions,
+  type SteamripBrowserMode,
+} from "./steamrip-browser";
 import { isCloudflareChallenge } from "./steamrip-fetch";
 
 export class CloudflareTestError extends Data.TaggedError("CloudflareTestError")<{
@@ -101,14 +105,12 @@ async function captureBrowserHeaders(
 
 async function openSteamrip(
   url: string,
-  headless: boolean,
+  mode: SteamripBrowserMode,
   timeoutSeconds: number,
 ): Promise<HeaderData | undefined> {
-  const { browser, page } = await connectRealBrowser({
-    headless,
-    turnstile: !headless,
-    disableXvfb: true,
-  });
+  const { browser, page } = await connectRealBrowser(
+    getSteamripBrowserLaunchOptions(mode),
+  );
 
   try {
     const capturedHeaders: Record<string, string> = {};
@@ -231,20 +233,20 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) =>
       PUPPETEER_OPTIONS.protocolTimeout || 180_000,
     );
 
-    const headlessHeaders = yield* Effect.tryPromise({
-      try: () => openSteamrip(url, true, 7),
+    const backgroundHeaders = yield* Effect.tryPromise({
+      try: () => openSteamrip(url, "background", 7),
       catch: (error) => new CloudflareTestError({ url, error }),
     }).pipe(
       Effect.catchAll((error) => {
-        console.log("Headless Steamrip check failed, trying a visible browser:", error);
+        console.log("Background Steamrip check failed, trying a visible browser:", error);
         return Effect.succeed(undefined);
       }),
     );
 
-    if (headlessHeaders) {
-      headerManager.requiresCloudflare = hasCloudflareCookies(headlessHeaders.cookies);
-      yield* headerManager.setHeaders(headlessHeaders);
-      return headlessHeaders;
+    if (backgroundHeaders) {
+      headerManager.requiresCloudflare = hasCloudflareCookies(backgroundHeaders.cookies);
+      yield* headerManager.setHeaders(backgroundHeaders);
+      return backgroundHeaders;
     }
 
     yield* Effect.sync(() => addon.notify({
@@ -254,7 +256,7 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) =>
     }));
 
     const visibleHeaders = yield* Effect.tryPromise({
-      try: () => openSteamrip(url, false, 60),
+      try: () => openSteamrip(url, "visible", 60),
       catch: (error) => new CloudflareTestError({ url, error }),
     });
 

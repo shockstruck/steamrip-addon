@@ -3,6 +3,10 @@ import { Effect } from "effect";
 import { convertPuppeteerCookies, headerManager } from "./header-manager";
 import { NetworkError } from "./errors";
 import { connectRealBrowser, navigateBrowserPage } from "./services/BaseService";
+import {
+  getSteamripBrowserLaunchOptions,
+  type SteamripBrowserMode,
+} from "./steamrip-browser";
 
 export function isCloudflareChallenge(
   status: number,
@@ -61,10 +65,12 @@ async function waitForSteamripChallengeToClear(page: any, timeoutMs = 90_000): P
 
 async function fetchSteamripHtmlWithBrowserMode(
   url: string,
-  headless: boolean,
+  mode: SteamripBrowserMode,
   challengeTimeoutMs: number,
 ): Promise<string> {
-  const { browser, page } = await connectRealBrowser({ headless, turnstile: !headless, disableXvfb: true });
+  const { browser, page } = await connectRealBrowser(
+    getSteamripBrowserLaunchOptions(mode),
+  );
 
   try {
     const headerData = headerManager.getHeaders();
@@ -112,10 +118,10 @@ async function fetchSteamripHtmlWithBrowserMode(
 
 async function fetchSteamripHtmlWithBrowser(url: string): Promise<string> {
   try {
-    return await fetchSteamripHtmlWithBrowserMode(url, true, 7_000);
+    return await fetchSteamripHtmlWithBrowserMode(url, "background", 7_000);
   } catch (error) {
-    console.log("Headless Steamrip fetch was blocked, opening a visible browser:", error);
-    return await fetchSteamripHtmlWithBrowserMode(url, false, 90_000);
+    console.log("Background Steamrip fetch was blocked, opening a visible browser:", error);
+    return await fetchSteamripHtmlWithBrowserMode(url, "visible", 90_000);
   }
 }
 
