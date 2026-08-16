@@ -10,6 +10,30 @@ import type { DownloadLink } from './services/matcher';
 // 8 hours in milliseconds
 const SCRAPE_EXPIRY_MS = 8 * 60 * 60 * 1000;
 
+export type SteamripGameDetails = {
+  title: string | undefined;
+  version: string | undefined;
+};
+
+export function parseSteamripGameDetails(html: string): SteamripGameDetails {
+  const document = new JSDOM(html).window.document;
+  const title = document.querySelector('h1.post-title')?.textContent
+    ?.replace(/\s+/g, ' ')
+    .trim();
+  const versionLabel = Array.from(document.querySelectorAll('strong')).find(
+    element => /^version\s*:?$/i.test(element.textContent?.trim() ?? '')
+  );
+  const version = versionLabel?.parentElement?.textContent
+    ?.replace(/^\s*version\s*:?\s*/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return {
+    title: title || undefined,
+    version: version || undefined
+  };
+}
+
 export default class Scraper {
   public catalog: { games: { name: string, url: string }[], lastUpdated: number } = { games: [], lastUpdated: 0 };
   private scrapesDir = 'steamrip-scrapes';
@@ -219,6 +243,12 @@ export default class Scraper {
         return { name, url };
       });
     });
+  }
+
+  scrapeGameDetails(url: string): Effect.Effect<SteamripGameDetails, NetworkError> {
+    return fetchSteamripHtml(url).pipe(
+      Effect.map(parseSteamripGameDetails)
+    );
   }
 
   processLocals(): Effect.Effect<void, FileSystemError> {

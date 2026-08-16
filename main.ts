@@ -1,4 +1,3 @@
-import { JSDOM } from "jsdom";
 import OGIAddon, {
   ConfigurationBuilder,
   EventResponse,
@@ -37,7 +36,6 @@ import axios from "axios";
 import { Stream } from "stream";
 import { cloudflareSolve } from "./lib/cloudflare";
 import { headerManager } from "./lib/header-manager";
-import { fetchSteamripHtml } from "./lib/steamrip-fetch";
 import {
   connectRealBrowser,
   PUPPETEER_OPTIONS,
@@ -45,6 +43,12 @@ import {
 } from "./lib/services/BaseService";
 import { applySetupOverrides } from "./lib/app-overrides";
 import { extractRar, extractWith7Zip } from "./lib/archive";
+
+type SteamripInstallInfo = {
+  title: string;
+  version?: string;
+  url?: string;
+};
 
 const baseAddon = new OGIAddon({
   name: "Steamrip Tool",
@@ -389,19 +393,40 @@ const program = Effect.gen(function* () {
 
       console.log("Found game", game.name);
 
-      // if this is an update, we need to check if the game has already been downloaded
+      // Steamrip updates pages in place, so compare the scraped version when the URL is unchanged.
       if (forType === "update") {
         const { cwd } = info.libraryInfo;
         const steamripInfo = yield* Effect.tryPromise(
           async () =>
-            await fs.readFile(
-              join(cwd as string, "steamrip-info.json"),
-              "utf8",
-            ),
+            JSON.parse(
+              await fs.readFile(
+                join(cwd as string, "steamrip-info.json"),
+                "utf8",
+              ),
+            ) as SteamripInstallInfo,
         ).pipe(Effect.catchAll(() => Effect.succeed(undefined)));
         if (steamripInfo) {
-          const { title } = JSON.parse(steamripInfo);
-          if (title === game.name) {
+          const urlChanged =
+            steamripInfo.url !== undefined && steamripInfo.url !== game.url;
+          const currentDetails = urlChanged
+            ? undefined
+            : yield* scraper.scrapeGameDetails(game.url).pipe(
+                Effect.catchAll((error) => {
+                  console.error(
+                    "Failed to check Steamrip game version",
+                    game.url,
+                    error,
+                  );
+                  return Effect.succeed(undefined);
+                }),
+              );
+          const contentMatches =
+            steamripInfo.version !== undefined &&
+            currentDetails?.version !== undefined
+              ? steamripInfo.version === currentDetails.version
+              : steamripInfo.title === (currentDetails?.title ?? game.name);
+
+          if (!urlChanged && contentMatches) {
             console.log("Game already downloaded.", game.name);
             return [
               {
@@ -1104,25 +1129,22 @@ const program = Effect.gen(function* () {
 
         // write to the game install cwd a "steamrip-info.json"
 
-        const { title }: { title: string | undefined } = yield* manifest
+        const gameDetails = yield* manifest
           ? pipe(
-              fetchSteamripHtml(manifest.url as string),
-              Effect.andThen((html) => new JSDOM(html)),
-              Effect.andThen((dom) => ({
-                title: dom.window.document
-                  .querySelector(".post-title")
-                  ?.textContent?.trim(),
-              })),
+              scraper.scrapeGameDetails(manifest.url as string),
               Effect.catchAll((error) => {
                 console.error(
                   "Failed to get app details",
                   manifest?.url,
                   error,
                 );
-                return Effect.succeed({ title: undefined });
+                return Effect.succeed({
+                  title: undefined,
+                  version: undefined,
+                });
               }),
             )
-          : Effect.succeed({ title: undefined });
+          : Effect.succeed({ title: undefined, version: undefined });
 
         yield* Effect.tryPromise({
           try: async () =>
@@ -1130,7 +1152,9 @@ const program = Effect.gen(function* () {
               join(input.cwd as string, "steamrip-info.json"),
               JSON.stringify(
                 {
-                  title: title ?? "unknown",
+                  title: gameDetails.title ?? "unknown",
+                  version: gameDetails.version,
+                  url: manifest?.url,
                 },
                 null,
                 2,
