@@ -1,10 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import {
+  connectRealBrowser,
   isBlankBrowserPageUrl,
   navigateBrowserPage,
   normalizeBrowserArgs,
   pickPrimaryBrowserPage,
   resolveBrowserExecutablePath,
+  resolveFlatpakChromiumExecutablePath,
   STEAMRIP_REFERER,
   type BrowserPageLike,
   type NavigablePageLike,
@@ -87,8 +89,44 @@ describe("browser launch helpers", () => {
         "arm64",
         {},
         path => existing.has(path),
+        () => undefined,
       ),
     ).toBe("/usr/bin/chromium-browser");
+  });
+
+  it("prefers a system Flatpak Chromium installation", () => {
+    const calls: string[][] = [];
+    const executablePath = resolveFlatpakChromiumExecutablePath(
+      (_executable, args) => {
+        calls.push([...args]);
+        return "/var/lib/flatpak/app/org.chromium.Chromium/current/active\n";
+      },
+      path => path.endsWith("/files/chromium/chrome"),
+    );
+
+    expect(executablePath).toBe(
+      "/var/lib/flatpak/app/org.chromium.Chromium/current/active/files/chromium/chrome",
+    );
+    expect(calls).toEqual([
+      ["info", "--system", "--show-location", "org.chromium.Chromium"],
+    ]);
+  });
+
+  it("falls back to a user Flatpak Chromium installation", () => {
+    const calls: string[][] = [];
+    const executablePath = resolveFlatpakChromiumExecutablePath(
+      (_executable, args) => {
+        calls.push([...args]);
+        if (args.includes("--system")) throw new Error("not installed");
+        return "/home/deck/.local/share/flatpak/app/org.chromium.Chromium/current/active";
+      },
+      () => true,
+    );
+
+    expect(executablePath).toBe(
+      "/home/deck/.local/share/flatpak/app/org.chromium.Chromium/current/active/files/chromium/chrome",
+    );
+    expect(calls.map(args => args[1])).toEqual(["--system", "--user"]);
   });
 
   it("prefers an explicitly configured Chrome path", () => {
@@ -100,6 +138,38 @@ describe("browser launch helpers", () => {
         path => path === "/custom/chrome",
       ),
     ).toBe("/custom/chrome");
+  });
+
+  it("forwards the discovered Chromium path to chrome-launcher", async () => {
+    const originalChromePath = process.env.CHROME_PATH;
+    let launchOptions: Record<string, unknown> | undefined;
+    const page = new FakePage("about:blank");
+
+    process.env.CHROME_PATH = "/bin/sh";
+    try {
+      await connectRealBrowser(
+        { headless: true, disableXvfb: true },
+        async options => {
+          launchOptions = options as unknown as Record<string, unknown>;
+          return {
+            browser: { pages: async () => [page] },
+            page,
+          } as never;
+        },
+      );
+    } finally {
+      if (originalChromePath === undefined) {
+        delete process.env.CHROME_PATH;
+      } else {
+        process.env.CHROME_PATH = originalChromePath;
+      }
+    }
+
+    expect(launchOptions).toMatchObject({
+      customConfig: {
+        chromePath: "/bin/sh",
+      },
+    });
   });
 
   it("opens provider pages with SteamRIP as the referer", async () => {

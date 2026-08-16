@@ -30,7 +30,7 @@ import {
   SteamSearchError,
 } from "./lib/errors";
 import { dirname, join, relative } from "path";
-import { spawnSync, execSync } from "child_process";
+import { spawnSync } from "child_process";
 import * as fs from "fs/promises";
 import { existsSync, type Stats } from "fs";
 import axios from "axios";
@@ -174,33 +174,6 @@ const program = Effect.gen(function* () {
           return Effect.dieMessage("Cannot access network check");
         }),
       );
-      // check if we're on linux, and if so, run CHROME_PATH="$(flatpak info --show-location org.chromium.Chromium)/files/chromium/chrome" to set the chrome path
-      if (process.platform === "linux") {
-        console.log("Setting CHROME_PATH for this device.");
-        yield* Effect.try(() => {
-          const flatpakPath = execSync(
-            "flatpak info --show-location org.chromium.Chromium",
-          )
-            .toString()
-            .trim();
-          process.env.CHROME_PATH = join(
-            flatpakPath,
-            "files",
-            "chromium",
-            "chrome",
-          );
-        }).pipe(
-          Effect.catchAll((err) => {
-            console.log(
-              "Error in setting CHROME_PATH for this device. Hopefully everything still works..",
-              err,
-            );
-            return Effect.succeed(undefined);
-          }),
-        );
-        console.log("CHROME_PATH set to", process.env.CHROME_PATH);
-      }
-
       process.env.PUPPETEER_PROTOCOL_TIMEOUT = String(
         PUPPETEER_OPTIONS.protocolTimeout || 180000,
       );
@@ -216,52 +189,22 @@ const program = Effect.gen(function* () {
       );
 
       if (!chromeInstalled) {
+        const browserInstallHelp =
+          process.platform === "linux"
+            ? "Install Chromium from the system Flathub source in Discover or run: flatpak install --system flathub org.chromium.Chromium. Then restart the addon server."
+            : "Install Chrome from the official website, then restart the addon server.";
+
         yield* Effect.sync(() =>
           task.log(
-            "Chrome/Chromium is not installed on the device. Please install it and try again.",
+            `Steamrip could not start Chrome/Chromium. ${browserInstallHelp}`,
           ),
         );
         yield* Effect.sync(() =>
           addon.notify({
-            message:
-              "Steamrip requires Chrome/Chromium to be installed on the device for accessing Steamrip.com",
-            id: "str-chrome-not-installed",
+            message: `Steamrip could not start Chrome/Chromium. ${browserInstallHelp}`,
+            id: "str-browser-unavailable",
             type: "error",
           }),
-        );
-
-        yield* Effect.promise(async () =>
-          event.askForInput(
-            "(1/3) Chrome/Chromium is not installed",
-            "Steamrip Addon requires Chrome/Chromium to be installed on the device for accessing Steamrip.com",
-            new ConfigurationBuilder(),
-          ),
-        );
-
-        if (process.platform === "linux") {
-          yield* Effect.promise(async () =>
-            event.askForInput(
-              "(2/3) Chrome/Chromium is not installed",
-              "Because you are on Linux, download the Flatpak version of Chromium from Discover or the CLI using flatpak install flathub org.chromium.Chromium",
-              new ConfigurationBuilder(),
-            ),
-          );
-        } else {
-          yield* Effect.promise(async () =>
-            event.askForInput(
-              "(2/3) Chrome/Chromium is not installed",
-              "Because you are on Windows, download the Chrome browser from the official website and install it.",
-              new ConfigurationBuilder(),
-            ),
-          );
-        }
-
-        yield* Effect.promise(async () =>
-          event.askForInput(
-            "(3/3) Chrome/Chromium is not installed",
-            "Once you have installed it, please restart the addon server and try again.",
-            new ConfigurationBuilder(),
-          ),
         );
 
         yield* Effect.sync(() => task.complete());

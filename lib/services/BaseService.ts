@@ -7,8 +7,11 @@ import adblock from "puppeteer-extra-plugin-adblocker";
 import type { Browser, Page } from "puppeteer";
 import { connect } from "puppeteer-real-browser";
 import { existsSync } from "fs";
+import { execFileSync } from "child_process";
+import { join } from "path";
 
 export const STEAMRIP_REFERER = "https://steamrip.com/";
+export const FLATPAK_CHROMIUM_APP_ID = "org.chromium.Chromium";
 
 export function withSteamripReferer(
   headers: Readonly<Record<string, string>> = {},
@@ -113,9 +116,16 @@ export function resolveBrowserExecutablePath(
   arch: string = process.arch,
   env: NodeJS.ProcessEnv = process.env,
   pathExists: (path: string) => boolean = existsSync,
+  resolveFlatpakPath: () => string | undefined = () =>
+    resolveFlatpakChromiumExecutablePath(undefined, pathExists),
 ): string | undefined {
   const configuredPath = env.CHROME_PATH || env.PUPPETEER_EXECUTABLE_PATH;
   if (configuredPath && pathExists(configuredPath)) return configuredPath;
+
+  if (platform === "linux") {
+    const flatpakPath = resolveFlatpakPath();
+    if (flatpakPath) return flatpakPath;
+  }
 
   if (platform === "linux" && (arch === "arm64" || arch === "aarch64")) {
     return [
@@ -124,6 +134,45 @@ export function resolveBrowserExecutablePath(
       "/usr/bin/google-chrome-stable",
       "/usr/bin/google-chrome",
     ].find(pathExists);
+  }
+
+  return undefined;
+}
+
+type FlatpakCommandRunner = (
+  executable: string,
+  args: readonly string[],
+) => string;
+
+function runFlatpakCommand(executable: string, args: readonly string[]): string {
+  return execFileSync(executable, [...args], {
+    stdio: ["ignore", "pipe", "ignore"],
+  }).toString();
+}
+
+export function resolveFlatpakChromiumExecutablePath(
+  runCommand: FlatpakCommandRunner = runFlatpakCommand,
+  pathExists: (path: string) => boolean = existsSync,
+): string | undefined {
+  for (const scope of ["system", "user"] as const) {
+    try {
+      const installationPath = runCommand("flatpak", [
+        "info",
+        `--${scope}`,
+        "--show-location",
+        FLATPAK_CHROMIUM_APP_ID,
+      ]).trim();
+      const executablePath = join(
+        installationPath,
+        "files",
+        "chromium",
+        "chrome",
+      );
+
+      if (pathExists(executablePath)) return executablePath;
+    } catch {
+      // Try the next Flatpak installation scope.
+    }
   }
 
   return undefined;
@@ -232,13 +281,20 @@ type RealBrowserConnectOptions = Parameters<typeof connect>[0] & {
 type RealBrowserConnectResult = Awaited<ReturnType<typeof connect>>;
 
 export async function connectRealBrowser(
-  options: RealBrowserConnectOptions = {}
+  options: RealBrowserConnectOptions = {},
+  connectBrowser: typeof connect = connect,
 ): Promise<RealBrowserConnectResult> {
   const headless = options.headless ?? false;
-  const connectResult = await connect({
+  const chromePath =
+    options.customConfig?.chromePath ?? resolveBrowserExecutablePath();
+  const connectResult = await connectBrowser({
     ...options,
     headless,
     args: buildBrowserArgs(options.args, { headless }),
+    customConfig: {
+      ...options.customConfig,
+      ...(chromePath ? { chromePath } : {}),
+    },
     connectOption: {
       defaultViewport: options.connectOption?.defaultViewport ?? options.defaultViewport ?? PUPPETEER_OPTIONS.defaultViewport,
       ...(options.connectOption ?? {}),
