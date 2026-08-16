@@ -1,4 +1,9 @@
 import { describe, expect, it } from "bun:test";
+import { spawnSync } from "child_process";
+import { chmodSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+import { fileURLToPath } from "url";
 import {
   connectRealBrowser,
   isBlankBrowserPageUrl,
@@ -94,39 +99,90 @@ describe("browser launch helpers", () => {
     ).toBe("/usr/bin/chromium-browser");
   });
 
-  it("prefers a system Flatpak Chromium installation", () => {
+  it("uses the Flatpak Chromium launcher on Linux", () => {
+    const launcherPath = "/addon/scripts/launch-flatpak-chromium.sh";
     const calls: string[][] = [];
+
     const executablePath = resolveFlatpakChromiumExecutablePath(
       (_executable, args) => {
         calls.push([...args]);
-        return "/var/lib/flatpak/app/org.chromium.Chromium/current/active\n";
+        return "installed";
       },
-      path => path.endsWith("/files/chromium/chrome"),
+      path => path === launcherPath,
+      launcherPath,
     );
 
-    expect(executablePath).toBe(
-      "/var/lib/flatpak/app/org.chromium.Chromium/current/active/files/chromium/chrome",
-    );
+    expect(executablePath).toBe(launcherPath);
     expect(calls).toEqual([
-      ["info", "--system", "--show-location", "org.chromium.Chromium"],
+      ["info", "--system", "org.chromium.Chromium"],
     ]);
+
+    expect(
+      resolveBrowserExecutablePath(
+        "linux",
+        "x64",
+        {},
+        path => path === launcherPath,
+        () => executablePath,
+      ),
+    ).toBe(launcherPath);
   });
 
   it("falls back to a user Flatpak Chromium installation", () => {
+    const launcherPath = "/addon/scripts/launch-flatpak-chromium.sh";
     const calls: string[][] = [];
     const executablePath = resolveFlatpakChromiumExecutablePath(
       (_executable, args) => {
         calls.push([...args]);
         if (args.includes("--system")) throw new Error("not installed");
-        return "/home/deck/.local/share/flatpak/app/org.chromium.Chromium/current/active";
+        return "installed";
       },
       () => true,
+      launcherPath,
     );
 
-    expect(executablePath).toBe(
-      "/home/deck/.local/share/flatpak/app/org.chromium.Chromium/current/active/files/chromium/chrome",
-    );
+    expect(executablePath).toBe(launcherPath);
     expect(calls.map(args => args[1])).toEqual(["--system", "--user"]);
+  });
+
+  it("launches Chromium through Flatpak with host tmp access", () => {
+    const toolsPath = mkdtempSync(join(tmpdir(), "steamrip-flatpak-test-"));
+    const fakeFlatpakPath = join(toolsPath, "flatpak");
+    writeFileSync(
+      fakeFlatpakPath,
+      '#!/bin/sh\nif [ "$1" = "info" ]; then exit 0; fi\nprintf \'%s\\n\' "$@"\n',
+    );
+    chmodSync(fakeFlatpakPath, 0o755);
+
+    try {
+      const launcherPath = fileURLToPath(
+        new URL("../scripts/launch-flatpak-chromium.sh", import.meta.url),
+      );
+      const result = spawnSync(
+        launcherPath,
+        ["--remote-debugging-port=9222", "--user-data-dir=/tmp/profile"],
+        {
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            PATH: `${toolsPath}:${process.env.PATH ?? ""}`,
+          },
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.stdout.trim().split("\n")).toEqual([
+        "run",
+        "--system",
+        "--filesystem=/tmp",
+        "--command=chromium",
+        "org.chromium.Chromium",
+        "--remote-debugging-port=9222",
+        "--user-data-dir=/tmp/profile",
+      ]);
+    } finally {
+      rmSync(toolsPath, { recursive: true, force: true });
+    }
   });
 
   it("prefers an explicitly configured Chrome path", () => {

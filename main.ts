@@ -179,10 +179,12 @@ const program = Effect.gen(function* () {
       );
 
       yield* Effect.sync(() => task.log("Checking browser availability..."));
+      let browserError: unknown;
       const chromeInstalled = yield* Effect.tryPromise(() =>
         connectRealBrowser({ headless: true, disableXvfb: true }),
       ).pipe(
         Effect.catchAll((err) => {
+          browserError = err;
           console.log("Browser check failed:", err);
           return Effect.succeed(undefined);
         }),
@@ -193,10 +195,18 @@ const program = Effect.gen(function* () {
           process.platform === "linux"
             ? "Install Chromium from the system Flathub source in Discover or run: flatpak install --system flathub org.chromium.Chromium. Then restart the addon server."
             : "Install Chrome from the official website, then restart the addon server.";
+        const browserErrorCause =
+          browserError instanceof Error ? browserError.cause : undefined;
+        const browserErrorMessage =
+          browserErrorCause instanceof Error
+            ? browserErrorCause.message
+            : browserError instanceof Error
+            ? browserError.message
+            : String(browserError);
 
         yield* Effect.sync(() =>
           task.log(
-            `Steamrip could not start Chrome/Chromium. ${browserInstallHelp}`,
+            `Steamrip could not start Chrome/Chromium: ${browserErrorMessage}. ${browserInstallHelp}`,
           ),
         );
         yield* Effect.sync(() =>
