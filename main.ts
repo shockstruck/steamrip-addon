@@ -207,6 +207,40 @@ const program = Effect.gen(function* () {
           }),
         );
 
+        yield* Effect.promise(async () =>
+          event.askForInput(
+            "(1/3) Chrome/Chromium could not be started",
+            "Steamrip requires Chrome/Chromium to access Steamrip.com.",
+            new ConfigurationBuilder(),
+          ),
+        );
+
+        if (process.platform === "linux") {
+          yield* Effect.promise(async () =>
+            event.askForInput(
+              "(2/3) Install Chromium from system Flathub",
+              "In Discover, select the system Flathub source for Chromium, or run: flatpak install --system flathub org.chromium.Chromium",
+              new ConfigurationBuilder(),
+            ),
+          );
+        } else {
+          yield* Effect.promise(async () =>
+            event.askForInput(
+              "(2/3) Install Chrome",
+              "Download Chrome from the official website and install it.",
+              new ConfigurationBuilder(),
+            ),
+          );
+        }
+
+        yield* Effect.promise(async () =>
+          event.askForInput(
+            "(3/3) Restart the addon server",
+            "After installing Chrome/Chromium, restart the addon server and try again.",
+            new ConfigurationBuilder(),
+          ),
+        );
+
         yield* Effect.sync(() => task.complete());
         return;
       }
