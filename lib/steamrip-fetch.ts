@@ -59,9 +59,11 @@ async function waitForSteamripChallengeToClear(page: any, timeoutMs = 90_000): P
   throw new Error(`Cloudflare challenge page returned while fetching steamrip content (title=${lastTitle}, url=${lastUrl}, browserCookies=${cookieCount})`);
 }
 
-async function fetchSteamripHtmlWithBrowser(url: string): Promise<string> {
-  const hasValidCloudflareCookies = headerManager.hasValidCloudflareHeaders();
-  const headless = hasValidCloudflareCookies;
+async function fetchSteamripHtmlWithBrowserMode(
+  url: string,
+  headless: boolean,
+  challengeTimeoutMs: number,
+): Promise<string> {
   const { browser, page } = await connectRealBrowser({ headless, turnstile: !headless, disableXvfb: true });
 
   try {
@@ -93,7 +95,7 @@ async function fetchSteamripHtmlWithBrowser(url: string): Promise<string> {
       timeout: 60_000,
     });
 
-    const html = await waitForSteamripChallengeToClear(activePage);
+    const html = await waitForSteamripChallengeToClear(activePage, challengeTimeoutMs);
 
     const steamripCookies = await activePage.cookies().then((allCookies: any[]) =>
       allCookies.filter((cookie) => cookie.domain?.includes("steamrip.com")),
@@ -105,6 +107,15 @@ async function fetchSteamripHtmlWithBrowser(url: string): Promise<string> {
     return html;
   } finally {
     await browser.close().catch(() => undefined);
+  }
+}
+
+async function fetchSteamripHtmlWithBrowser(url: string): Promise<string> {
+  try {
+    return await fetchSteamripHtmlWithBrowserMode(url, true, 7_000);
+  } catch (error) {
+    console.log("Headless Steamrip fetch was blocked, opening a visible browser:", error);
+    return await fetchSteamripHtmlWithBrowserMode(url, false, 90_000);
   }
 }
 

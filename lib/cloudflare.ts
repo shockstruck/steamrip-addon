@@ -1,499 +1,273 @@
-import { Data, Effect, pipe } from "effect";
-import type OGIAddon from "ogi-addon";
-import { headerManager, convertPuppeteerCookies } from "./header-manager";
-import { isCloudflareChallenge } from "./steamrip-fetch";
 import axios from "axios";
-import type { Page } from "puppeteer";
+import { Data, Effect } from "effect";
+import type OGIAddon from "ogi-addon";
+import type { CookieParam, Page } from "puppeteer";
 import type { PageWithCursor } from "puppeteer-real-browser";
+import {
+  convertPuppeteerCookies,
+  headerManager,
+  type Cookie,
+  type HeaderData,
+} from "./header-manager";
 import { connectRealBrowser, navigateBrowserPage, PUPPETEER_OPTIONS } from "./services/BaseService";
+import { isCloudflareChallenge } from "./steamrip-fetch";
 
-export class CloudflareTestError extends Data.TaggedError('CloudflareTestError')<{
+export class CloudflareTestError extends Data.TaggedError("CloudflareTestError")<{
   url: string;
   error: unknown;
 }> {}
 
-export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(function* () {
-  // Load existing headers first
-  yield* headerManager.loadHeaders();
-  
-  // Check if we have valid Cloudflare headers
-  const hasValidCloudflareHeaders = () => {
-    const headers = headerManager.getHeaders();
-    // Check for Cloudflare-specific cookies that indicate a successful solve
-    const cloudflareCookies = headers.cookies.filter(cookie => 
-      cookie.name.includes('cf_') || 
-      cookie.name.includes('__cf') ||
-      cookie.name.includes('cloudflare') ||
-      cookie.name === 'cf_clearance'
-    );
-    return cloudflareCookies.length > 0;
-  };
-  
-  const steamripHeadersAreValid = (status: number, headers: Record<string, unknown>, body: string) =>
-    status >= 200 &&
-    status < 300 &&
-    !isCloudflareChallenge(status, headers, body);
+type SteamripPage = PageWithCursor | Page;
 
-  // If we already have valid Cloudflare headers, test them first
-  if (hasValidCloudflareHeaders()) {
-    const testResponse = yield* Effect.tryPromise({
-      try: () => axios.get(url, {
-        headers: headerManager.getHeaderObject(),
-        timeout: 10_000,
-        validateStatus: () => true,
-        responseType: "text",
-      }),
-      catch: () => undefined,
-    }).pipe(Effect.catchAll((err) => {
-      console.log('Error:', err);
-      return Effect.succeed(undefined);
+function hasCloudflareCookies(cookies: readonly Cookie[]): boolean {
+  return cookies.some((cookie) =>
+    cookie.name.includes("cf_") ||
+    cookie.name.includes("__cf") ||
+    cookie.name.includes("cloudflare") ||
+    cookie.name === "cf_clearance"
+  );
+}
+
+function isSteamripUrl(url: string): boolean {
+  try {
+    const hostname = new URL(url).hostname;
+    return hostname === "steamrip.com" || hostname.endsWith(".steamrip.com");
+  } catch {
+    return false;
+  }
+}
+
+async function waitForSteamripAccess(
+  page: SteamripPage,
+  timeoutSeconds: number,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutSeconds * 1_000;
+  let successfulChecks = 0;
+
+  while (Date.now() < deadline) {
+    if (page.isClosed()) {
+      return false;
+    }
+
+    const content = await page.content().catch(() => undefined);
+    const currentUrl = page.url();
+
+    if (
+      content &&
+      isSteamripUrl(currentUrl) &&
+      !isCloudflareChallenge(200, {}, content)
+    ) {
+      successfulChecks++;
+      if (successfulChecks >= 3) {
+        return true;
+      }
+    } else {
+      successfulChecks = 0;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+
+  return false;
+}
+
+async function captureBrowserHeaders(
+  page: SteamripPage,
+  capturedHeaders: Record<string, string>,
+): Promise<HeaderData> {
+  const cookies = await page.cookies();
+  const steamripCookies = cookies.filter((cookie) =>
+    cookie.domain.includes("steamrip.com")
+  );
+  // The two Puppeteer packages expose equivalent runtime APIs with incompatible types.
+  const evaluablePage = page as Page;
+  const userAgent = await evaluablePage.evaluate(() => navigator.userAgent);
+  const browserHeaders = await evaluablePage.evaluate(() => ({
+    accept: "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8",
+    acceptLanguage: navigator.language || "en-US,en;q=0.9",
+    acceptEncoding: "gzip, deflate, br",
+    secFetchDest: "document",
+    secFetchMode: "navigate",
+    secFetchSite: "none",
+  }));
+
+  return {
+    cookies: convertPuppeteerCookies(steamripCookies),
+    userAgent,
+    ...browserHeaders,
+    ...capturedHeaders,
+  };
+}
+
+async function openSteamrip(
+  url: string,
+  headless: boolean,
+  timeoutSeconds: number,
+): Promise<HeaderData | undefined> {
+  const { browser, page } = await connectRealBrowser({
+    headless,
+    turnstile: !headless,
+    disableXvfb: true,
+  });
+
+  try {
+    const capturedHeaders: Record<string, string> = {};
+    const storedCookies = headerManager.getCookies().map((cookie): CookieParam => ({
+      name: cookie.name,
+      value: cookie.value,
+      domain: cookie.domain?.startsWith(".")
+        ? cookie.domain
+        : (cookie.domain ?? ".steamrip.com"),
+      path: cookie.path ?? "/",
+      expires: cookie.expires,
+      httpOnly: cookie.httpOnly,
+      secure: cookie.secure,
+      sameSite: cookie.sameSite as CookieParam["sameSite"],
     }));
 
-    if (testResponse && steamripHeadersAreValid(testResponse.status, testResponse.headers, testResponse.data)) {
+    if (storedCookies.length > 0) {
+      await (page as unknown as Page).setCookie(...storedCookies).catch(() => undefined);
+    }
+
+    const storedUserAgent = headerManager.getHeaders().userAgent;
+    if (storedUserAgent) {
+      await (page as unknown as Page).setUserAgent(storedUserAgent).catch(() => undefined);
+    }
+
+    const captureRequests = async (activePage: SteamripPage): Promise<void> => {
+      await activePage.setRequestInterception(true);
+      activePage.on("request", (request) => {
+        if (
+          request.url().includes("steamrip.com") &&
+          Object.keys(capturedHeaders).length === 0
+        ) {
+          for (const [name, value] of Object.entries(request.headers())) {
+            if (value && name.toLowerCase() !== "cookie") {
+              capturedHeaders[name] = value;
+            }
+          }
+        }
+        void request.continue().catch(() => undefined);
+      });
+    };
+
+    await captureRequests(page).catch(() => undefined);
+    const activePage = await navigateBrowserPage(browser as any, page as any, url, {
+      waitUntil: "domcontentloaded",
+      timeout: 30_000,
+    });
+    if (activePage !== page) {
+      await captureRequests(activePage).catch(() => undefined);
+    }
+
+    if (!(await waitForSteamripAccess(activePage, timeoutSeconds))) {
+      return undefined;
+    }
+
+    return await captureBrowserHeaders(activePage, capturedHeaders);
+  } finally {
+    await browser.close().catch(() => undefined);
+  }
+}
+
+export const cloudflareSolve = (url: string, addon: OGIAddon) =>
+  Effect.gen(function* () {
+    yield* headerManager.loadHeaders();
+
+    const testAccess = () =>
+      Effect.tryPromise({
+        try: () => axios.get<string>(url, {
+          headers: headerManager.getHeaderObject(),
+          timeout: 10_000,
+          validateStatus: () => true,
+          responseType: "text",
+        }),
+        catch: (error) => new CloudflareTestError({ url, error }),
+      }).pipe(Effect.option);
+
+    if (headerManager.hasValidCloudflareHeaders()) {
+      const cachedResponse = yield* testAccess();
+      if (
+        cachedResponse._tag === "Some" &&
+        cachedResponse.value.status >= 200 &&
+        cachedResponse.value.status < 300 &&
+        !isCloudflareChallenge(
+          cachedResponse.value.status,
+          cachedResponse.value.headers,
+          cachedResponse.value.data,
+        )
+      ) {
+        return headerManager.getHeaders();
+      }
+
+      if (
+        cachedResponse._tag === "Some" &&
+        isCloudflareChallenge(
+          cachedResponse.value.status,
+          cachedResponse.value.headers,
+          cachedResponse.value.data,
+        )
+      ) {
+        yield* headerManager.clearHeaders();
+      }
+    }
+
+    const directResponse = yield* testAccess();
+    if (
+      directResponse._tag === "Some" &&
+      directResponse.value.status >= 200 &&
+      directResponse.value.status < 300 &&
+      !isCloudflareChallenge(
+        directResponse.value.status,
+        directResponse.value.headers,
+        directResponse.value.data,
+      )
+    ) {
+      headerManager.requiresCloudflare = false;
       return headerManager.getHeaders();
     }
 
-    if (testResponse && isCloudflareChallenge(testResponse.status, testResponse.headers, testResponse.data)) {
-      console.log('Stored Cloudflare headers are stale (blocked by challenge), clearing and re-solving');
-      yield* headerManager.clearHeaders();
-    }
-  }
+    process.env.PUPPETEER_PROTOCOL_TIMEOUT = String(
+      PUPPETEER_OPTIONS.protocolTimeout || 180_000,
+    );
 
-  // check using axios to see if we can just get the page
-  console.log('Checking if we can just get the page');
-  const testResponse = yield* Effect.tryPromise(async () => {
-    const response = await axios.get(url, {
-      headers: headerManager.getHeaderObject(),
-      timeout: 10_000,
-      validateStatus: () => true,
-      responseType: "text",
-    });
-    return response;
-  }).pipe(Effect.catchAll((err) => {
-    console.log('Error:', err);
-    return Effect.succeed(undefined);
-  }));
-
-  if (testResponse && steamripHeadersAreValid(testResponse.status, testResponse.headers, testResponse.data)) {
-    headerManager.requiresCloudflare = false;
-    return headerManager.getHeaders();
-  }
-
-  // Define the content waiter function for monitoring Cloudflare challenge progress
-  const contentWaiter = (timeoutSeconds: number, page: PageWithCursor | Page) => Effect.gen(function* () {
-    const maxAttempts = timeoutSeconds * 10;
-    let attempts = 0;
-    let successfulChecks = 0;
-    const requiredSuccessfulChecks = 30; // 3 seconds of stable state (30 * 100ms)
-    let cloudflareRedirectCount = 0;
-    const maxCloudflareRedirects = 10;
-    let previousUrl = '';
-    let previousHadCloudflare = false;
-    let stableCloudflareChecks = 0; // Track how long we've been on the same Cloudflare page
-
-    while (attempts < maxAttempts) {
-      // Check if page is closed
-      const isClosed = yield* Effect.tryPromise({
-        try: () => Promise.resolve(page.isClosed()),
-        catch: () => new Error('Failed to check if page is closed')
-      });
-
-      if (isClosed) {
-        return false;
-      }
-
-      // Get current URL to check if we're on steamrip.com
-      const currentUrl = yield* Effect.try({
-        try: () => page.url(),
-        catch: () => new Error('Failed to get page URL')
-      });
-
-      // Get page content
-      const content = yield* Effect.tryPromise(async () => await page.content()).pipe(Effect.catchAll((err) => {
-        console.log('Error:', err);
+    const headlessHeaders = yield* Effect.tryPromise({
+      try: () => openSteamrip(url, true, 7),
+      catch: (error) => new CloudflareTestError({ url, error }),
+    }).pipe(
+      Effect.catchAll((error) => {
+        console.log("Headless Steamrip check failed, trying a visible browser:", error);
         return Effect.succeed(undefined);
-      }));
-      if (!content) {
-        yield* Effect.sleep(500);
-        continue;
-      }
+      }),
+    );
 
-      // Check if we're on steamrip.com and not on a Cloudflare challenge page
-      const onSteamrip = currentUrl.includes('steamrip.com');
-      const hasCloudflareChallenge = content.includes('Cloudflare') || content.includes('Just a moment') || content.includes('Checking your browser');
-
-      // Detect Cloudflare redirects/reloads
-      if (hasCloudflareChallenge) {
-        // Check if URL changed while we're still on a Cloudflare challenge
-        if (previousHadCloudflare && previousUrl !== currentUrl && previousUrl !== '') {
-          cloudflareRedirectCount++;
-          console.log(`Cloudflare redirect detected (${cloudflareRedirectCount}/${maxCloudflareRedirects}): ${previousUrl} → ${currentUrl}`);
-          
-          if (cloudflareRedirectCount >= maxCloudflareRedirects) {
-            console.log(`Maximum Cloudflare redirects (${maxCloudflareRedirects}) reached, giving up`);
-            return false;
-          }
-          
-          // Reset the attempts counter to give each redirect cycle a fresh timeout window
-          attempts = 0;
-          stableCloudflareChecks = 0;
-        } else if (previousUrl === currentUrl) {
-          // Same URL, increment stable checks
-          stableCloudflareChecks++;
-          // Provide feedback every 5 seconds (50 checks * 100ms)
-          if (stableCloudflareChecks % 50 === 0) {
-            const secondsWaiting = stableCloudflareChecks / 10;
-            console.log(`Still waiting on Cloudflare challenge (${secondsWaiting}s on same page)...`);
-          }
-        }
-        
-        previousUrl = currentUrl;
-        previousHadCloudflare = true;
-        successfulChecks = 0;
-      } else if (onSteamrip && !hasCloudflareChallenge) {
-        // Successfully passed Cloudflare
-        successfulChecks++;
-        
-        // Also check if we went from Cloudflare to non-Cloudflare but then back to Cloudflare
-        if (previousHadCloudflare && successfulChecks === 1) {
-          console.log('Transitioned from Cloudflare challenge to actual site');
-        }
-        
-        if (successfulChecks >= requiredSuccessfulChecks) {
-          console.log('Successfully reached steamrip.com, Cloudflare solved (stable for 3 seconds)');
-          console.log('Current URL:', currentUrl);
-          return true;
-        }
-        if (successfulChecks % 10 === 0) {
-          console.log(`Cloudflare challenge passed, confirming stability... (${successfulChecks}/${requiredSuccessfulChecks})`);
-        }
-        
-        previousUrl = currentUrl;
-        previousHadCloudflare = false;
-        stableCloudflareChecks = 0;
-      } else {
-        // Not on steamrip yet
-        previousUrl = currentUrl;
-        previousHadCloudflare = false;
-        successfulChecks = 0;
-        stableCloudflareChecks = 0;
-      }
-
-      // Log redirect attempts for debugging
-      if (!onSteamrip && attempts % 10 === 0) {
-        console.log(`Waiting for redirect to steamrip.com... Current URL: ${currentUrl}`);
-      }
-
-      // Provide timeout progress feedback
-      if (attempts % 100 === 0 && attempts > 0) {
-        const elapsedSeconds = attempts / 10;
-        const remainingSeconds = (maxAttempts - attempts) / 10;
-        console.log(`Cloudflare challenge progress: ${elapsedSeconds}s elapsed, ${remainingSeconds}s remaining (${currentUrl})`);
-      }
-
-      // Wait 100ms before next attempt
-      yield* Effect.sleep(100);
-      attempts++;
+    if (headlessHeaders) {
+      headerManager.requiresCloudflare = hasCloudflareCookies(headlessHeaders.cookies);
+      yield* headerManager.setHeaders(headlessHeaders);
+      return headlessHeaders;
     }
 
-    console.log(`Timeout reached waiting for Cloudflare challenge to complete after ${timeoutSeconds}s`);
-    console.log(`Final state: URL=${page.url()}, redirects=${cloudflareRedirectCount}, stable checks=${stableCloudflareChecks}`);
-    return false;
-  });
-
-  const attachRequestCapture = (page: PageWithCursor | Page, capturedHeaders: Record<string, string>) =>
-    Effect.tryPromise({
-      try: async () => {
-        await page.setRequestInterception(true);
-        page.on('request', (request) => {
-          if (request.url().includes('steamrip.com') && Object.keys(capturedHeaders).length === 0) {
-            Object.entries(request.headers()).forEach(([key, value]) => {
-              if (value) {
-                capturedHeaders[key] = value;
-              }
-            });
-          }
-          request.continue();
-        });
-      },
-      catch: () => new Error('Failed to set request interception')
-    });
-
-  // Set protocol timeout via environment variable to avoid Runtime.callFunctionOn timeout
-  process.env.PUPPETEER_PROTOCOL_TIMEOUT = String(PUPPETEER_OPTIONS.protocolTimeout || 180000);
-  const headlessConn = yield* Effect.tryPromise(() => connectRealBrowser({ headless: true, disableXvfb: true })).pipe(Effect.catchAll((err) => {
-    console.log('Failed to launch headless browser, will try visible browser:', err);
-    return Effect.succeed(undefined);
-  }));
-
-  if (!headlessConn) {
-    console.log('Headless browser failed to launch, attempting visible browser instead...');
-
-    // Try with visible browser directly
-    const visibleConn = yield* Effect.tryPromise({
-      try: () => connectRealBrowser({ headless: false, turnstile: true, disableXvfb: true }),
-      catch: (error) => new Error(`Failed to launch browser: ${error}`)
-    });
-
-    const { browser, page: visiblePage } = visibleConn;
-    const visibleCapturedHeaders: Record<string, string> = {};
-    const activeVisiblePage = yield* Effect.tryPromise({
-      try: () => navigateBrowserPage(browser as any, visiblePage as any, url),
-      catch: () => new Error('Failed to navigate to URL')
-    });
-    yield* attachRequestCapture(activeVisiblePage, visibleCapturedHeaders).pipe(Effect.catchAll(() => Effect.void));
-
     yield* Effect.sync(() => addon.notify({
-      message: 'Headless browser failed. Please solve the Cloudflare challenge in the opened browser window.',
-      id: 'cloudflare-captcha',
-      type: 'warning',
+      message: "Steamrip requires a Cloudflare captcha. Please solve it in the opened browser window.",
+      id: "cloudflare-captcha",
+      type: "warning",
     }));
 
-    const visibleResult = yield* contentWaiter(60, activeVisiblePage);
+    const visibleHeaders = yield* Effect.tryPromise({
+      try: () => openSteamrip(url, false, 60),
+      catch: (error) => new CloudflareTestError({ url, error }),
+    });
 
-    if (!visibleResult) {
-      // Immediately kill the browser window
-      yield* Effect.tryPromise({
-        try: async () => {
-          // Force close all pages first
-          const pages = await browser.pages();
-          await Promise.all(pages.map(p => p.close().catch(() => {})));
-          // Then close the browser
-          await browser.close();
-        },
-        catch: () => new Error('Failed to close browser')
-      });
-
+    if (!visibleHeaders) {
       yield* Effect.sync(() => addon.notify({
-        message: 'Failed to solve Cloudflare captcha.',
-        id: 'cloudflare-captcha',
-        type: 'error',
+        message: "Failed to solve the Cloudflare captcha.",
+        id: "cloudflare-captcha",
+        type: "error",
       }));
-
-      throw new Error('Failed to solve Cloudflare captcha');
-    } else {
-      // Capture all headers from the visible page
-      const headers = yield* captureBrowserHeaders(activeVisiblePage, visibleCapturedHeaders);
-
-      // Verify we have Cloudflare headers before storing
-      const cloudflareCookies = headers.cookies.filter(cookie =>
-        cookie.name.includes('cf_') ||
-        cookie.name.includes('__cf') ||
-        cookie.name.includes('cloudflare') ||
-        cookie.name === 'cf_clearance'
-      );
-
-      if (cloudflareCookies.length === 0) {
-        yield* Effect.sync(() => addon.notify({
-          message: 'Cloudflare solve completed but no Cloudflare cookies found. Retrying...',
-          id: 'cloudflare-captcha',
-          type: 'warning',
-        }));
-
-        yield* Effect.tryPromise({
-          try: () => browser.close(),
-          catch: () => new Error('Failed to close browser')
-        });
-
-        throw new Error('No Cloudflare cookies found after solve');
-      }
-
-      // Store all headers
-      yield* headerManager.setHeaders(headers);
-
-      // Close browser after getting headers
-      yield* Effect.tryPromise({
-        try: () => browser.close(),
-        catch: () => new Error('Failed to close browser')
-      });
-
-      return headers;
+      throw new Error("Failed to open Steamrip after the Cloudflare captcha");
     }
-  }
 
-  const { browser: browserHeadless, page } = headlessConn;
-  const capturedHeaders: Record<string, string> = {};
-  
-  const activeHeadlessPage = yield* Effect.tryPromise({
-    try: () => navigateBrowserPage(browserHeadless as any, page as any, url),
-    catch: () => new Error('Failed to navigate to URL')
+    headerManager.requiresCloudflare = hasCloudflareCookies(visibleHeaders.cookies);
+    yield* headerManager.setHeaders(visibleHeaders);
+    return visibleHeaders;
   });
-  yield* attachRequestCapture(activeHeadlessPage, capturedHeaders).pipe(Effect.catchAll(() => Effect.void));
-
-  const headlessResult = yield* contentWaiter(7, activeHeadlessPage);
-  
-  if (!headlessResult) {
-    yield* Effect.sync(() => addon.notify({
-      message: 'Steamrip requires a Cloudflare captcha to be solved. Please solve it in the new window opened.',
-      id: 'cloudflare-captcha',
-      type: 'warning',
-    }));
-    
-    yield* Effect.tryPromise({
-      try: () => browserHeadless.close(),
-      catch: () => new Error('Failed to close headless browser')
-    });
-    
-    const visibleConn = yield* Effect.tryPromise({
-      try: () => connectRealBrowser({ headless: false, turnstile: true, disableXvfb: true }),
-      catch: () => new Error('Failed to launch browser')
-    });
-
-    const { browser, page: visiblePage } = visibleConn;
-    const visibleCapturedHeaders: Record<string, string> = {};
-    
-    const activeVisiblePage = yield* Effect.tryPromise({
-      try: () => navigateBrowserPage(browser as any, visiblePage as any, url),
-      catch: () => new Error('Failed to navigate to URL')
-    });
-    yield* attachRequestCapture(activeVisiblePage, visibleCapturedHeaders).pipe(Effect.catchAll(() => Effect.void));
-    
-    const visibleResult = yield* pipe(contentWaiter(60, activeVisiblePage), Effect.catchAll((err) => {
-      console.log('Error:', err);
-      return Effect.succeed(false);
-    }));
-
-    if (!visibleResult) {
-      // Immediately kill the browser window
-      yield* Effect.tryPromise({
-        try: async () => {
-          // Force close all pages first
-          const pages = await browser.pages();
-          await Promise.all(pages.map(p => p.close().catch(() => {})));
-          // Then close the browser
-          await browser.close();
-        },
-        catch: () => new Error('Failed to close browser')
-      });
-
-      yield* Effect.sync(() => addon.notify({
-        message: 'Failed to solve Cloudflare captcha.',
-        id: 'cloudflare-captcha',
-        type: 'error',
-      }));
-
-      throw new Error('Failed to solve Cloudflare captcha');
-    } else {
-      // Capture all headers from the visible page
-      const headers = yield* captureBrowserHeaders(activeVisiblePage, visibleCapturedHeaders);
-
-      // Verify we have Cloudflare headers before storing
-      const cloudflareCookies = headers.cookies.filter(cookie =>
-        cookie.name.includes('cf_') ||
-        cookie.name.includes('__cf') ||
-        cookie.name.includes('cloudflare') ||
-        cookie.name === 'cf_clearance'
-      );
-      
-      if (cloudflareCookies.length === 0) {
-        yield* Effect.sync(() => addon.notify({
-          message: 'Cloudflare solve completed but no Cloudflare cookies found. Retrying...',
-          id: 'cloudflare-captcha',
-          type: 'warning',
-        }));
-        
-        yield* Effect.tryPromise({
-          try: () => browser.close(),
-          catch: () => new Error('Failed to close browser')
-        });
-        
-        throw new Error('No Cloudflare cookies found after solve');
-      }
-
-      // Store all headers
-      yield* headerManager.setHeaders(headers);
-
-      // Close browser after getting headers
-      yield* Effect.tryPromise({
-        try: () => browser.close(),
-        catch: () => new Error('Failed to close browser')
-      });
-
-      return headers;
-    }
-  }
-
-  // Capture all headers from the headless browser
-  const headers = yield* captureBrowserHeaders(activeHeadlessPage, capturedHeaders);
-  
-  // Verify we have Cloudflare headers before storing
-  const cloudflareCookies = headers.cookies.filter(cookie => 
-    cookie.name.includes('cf_') || 
-    cookie.name.includes('__cf') ||
-    cookie.name.includes('cloudflare') ||
-    cookie.name === 'cf_clearance'
-  );
-  
-  if (cloudflareCookies.length === 0) {
-    yield* Effect.sync(() => addon.notify({
-      message: 'Headless Cloudflare solve completed but no Cloudflare cookies found. Retrying with visible browser...',
-      id: 'cloudflare-captcha',
-      type: 'warning',
-    }));
-    
-    yield* Effect.tryPromise({
-      try: () => browserHeadless.close(),
-      catch: () => new Error('Failed to close headless browser')
-    });
-    
-    throw new Error('No Cloudflare cookies found after headless solve');
-  }
-  
-  // Store all headers
-  yield* headerManager.setHeaders(headers);
-
-  // on success, close the headless browser after getting headers
-  yield* Effect.tryPromise({
-    try: () => browserHeadless.close(),
-    catch: () => new Error('Failed to close headless browser')
-  });
-  
-  return headers;
-});
-
-// Helper function to capture all headers from a browser page
-const captureBrowserHeaders = (page: PageWithCursor, capturedHeaders: Record<string, string> = {}) => Effect.gen(function* () {
-  // Get cookies
-  const cookies = yield* Effect.tryPromise({
-    try: () => page.cookies(),
-    catch: () => new Error('Failed to get cookies')
-  });
-
-  // Filter down to steamrip cookies
-  const steamripCookies = cookies.filter(cookie => cookie.domain.includes('steamrip.com'));
-  const convertedCookies = convertPuppeteerCookies(steamripCookies);
-
-  // Get user agent and other browser headers
-  const userAgent = yield* Effect.tryPromise({
-    try: () => page.evaluate(() => navigator.userAgent),
-    catch: () => new Error('Failed to get user agent')
-  });
-
-  // Get additional headers by evaluating the page context
-  const additionalHeaders = yield* Effect.tryPromise({
-    try: () => page.evaluate(() => {
-      // Try to get headers from any existing requests or the page context
-      return {
-        accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
-        acceptLanguage: navigator.language || 'en-US,en;q=0.9',
-        acceptEncoding: 'gzip, deflate, br',
-        secFetchDest: 'document',
-        secFetchMode: 'navigate',
-        secFetchSite: 'none',
-        secChUa: '"Google Chrome";v="119", "Chromium";v="119", "Not?A_Brand";v="24"',
-        secChUaMobile: '?0',
-        secChUaPlatform: '"macOS"'
-      };
-    }),
-    catch: () => new Error('Failed to get additional headers')
-  });
-
-  // Merge captured headers with additional headers, prioritizing captured ones
-  const mergedHeaders = { ...additionalHeaders, ...capturedHeaders };
-
-  return {
-    cookies: convertedCookies,
-    userAgent,
-    ...mergedHeaders
-  };
-});
