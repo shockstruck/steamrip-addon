@@ -8,10 +8,13 @@ import type { Browser, Page } from "puppeteer";
 import { connect } from "puppeteer-real-browser";
 import { existsSync } from "fs";
 import { execFileSync } from "child_process";
-import { join } from "path";
+import { fileURLToPath } from "url";
 
 export const STEAMRIP_REFERER = "https://steamrip.com/";
 export const FLATPAK_CHROMIUM_APP_ID = "org.chromium.Chromium";
+const FLATPAK_CHROMIUM_LAUNCHER_PATH = fileURLToPath(
+  new URL("../../scripts/launch-flatpak-chromium.sh", import.meta.url),
+);
 
 export function withSteamripReferer(
   headers: Readonly<Record<string, string>> = {},
@@ -153,23 +156,14 @@ function runFlatpakCommand(executable: string, args: readonly string[]): string 
 export function resolveFlatpakChromiumExecutablePath(
   runCommand: FlatpakCommandRunner = runFlatpakCommand,
   pathExists: (path: string) => boolean = existsSync,
+  launcherPath: string = FLATPAK_CHROMIUM_LAUNCHER_PATH,
 ): string | undefined {
+  if (!pathExists(launcherPath)) return undefined;
+
   for (const scope of ["system", "user"] as const) {
     try {
-      const installationPath = runCommand("flatpak", [
-        "info",
-        `--${scope}`,
-        "--show-location",
-        FLATPAK_CHROMIUM_APP_ID,
-      ]).trim();
-      const executablePath = join(
-        installationPath,
-        "files",
-        "chromium",
-        "chrome",
-      );
-
-      if (pathExists(executablePath)) return executablePath;
+      runCommand("flatpak", ["info", `--${scope}`, FLATPAK_CHROMIUM_APP_ID]);
+      return launcherPath;
     } catch {
       // Try the next Flatpak installation scope.
     }
