@@ -1049,7 +1049,6 @@ const program = Effect.gen(function* () {
           commonRedistExecutables.push(
             { name: "dotnet40", path: "winetricks" },
             { name: "dotnet48", path: "winetricks" },
-            { name: "vcrun2019", path: "winetricks" },
             { name: "vcrun2022", path: "winetricks" },
             { name: "xna40", path: "winetricks" },
           );
