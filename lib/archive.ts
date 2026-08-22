@@ -1,5 +1,5 @@
 import { spawn } from "child_process";
-import { resolve } from "path";
+import { basename, resolve } from "path";
 
 const MAX_OUTPUT_LENGTH = 64 * 1024;
 
@@ -11,18 +11,29 @@ export type RarExtractionResult = {
   output: string;
 };
 
+export type RarExtractorCommand = "unrar" | "unar";
+
+// Prefer unrar, but fall back to unar (The Unarchiver), which also extracts RAR.
+export function resolveRarExtractor(): RarExtractorCommand | null {
+  return (
+    (["unrar", "unar"] as const).find((command) => Bun.which(command)) ?? null
+  );
+}
+
 export function extractRar(
   archivePath: string,
   destinationPath: string,
   command = "unrar",
   onProgress?: ExtractionProgressCallback,
 ): Promise<RarExtractionResult> {
-  return runExtractor(
-    command,
-    ["x", "-y", resolve(archivePath)],
-    destinationPath,
-    onProgress,
-  );
+  // unar has its own CLI: -f overwrites and -D skips the wrapper directory,
+  // matching unrar's "x -y" behavior. unar prints no percentages, so progress
+  // only reports 100 on completion.
+  const args: string[] =
+    basename(command) === "unar"
+      ? ["-f", "-D", resolve(archivePath)]
+      : ["x", "-y", resolve(archivePath)];
+  return runExtractor(command, args, destinationPath, onProgress);
 }
 
 export function extractWith7Zip(

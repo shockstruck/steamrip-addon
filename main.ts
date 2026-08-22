@@ -42,7 +42,11 @@ import {
   withSteamripReferer,
 } from "./lib/services/BaseService";
 import { applySetupOverrides } from "./lib/app-overrides";
-import { extractRar, extractWith7Zip } from "./lib/archive";
+import {
+  extractRar,
+  extractWith7Zip,
+  resolveRarExtractor,
+} from "./lib/archive";
 
 type SteamripInstallInfo = {
   title: string;
@@ -767,6 +771,18 @@ const program = Effect.gen(function* () {
           process.platform === "linux"
         ) {
           const archivePath = join(path, file.name);
+          const rarExtractor =
+            process.platform === "win32" ? null : resolveRarExtractor();
+          if (process.platform !== "win32" && !rarExtractor) {
+            const missingExtractor =
+              "No RAR extractor found in PATH. Install unrar (unrar-nonfree) or unar with your package manager, then restart the addon.";
+            yield* Effect.promise(async () =>
+              showErrorScreen(missingExtractor),
+            );
+            return yield* Effect.fail(
+              new RarExtractionError({ path, error: missingExtractor }),
+            );
+          }
           const result = yield* Effect.tryPromise({
             try: () =>
               process.platform === "win32"
@@ -781,7 +797,7 @@ const program = Effect.gen(function* () {
                 : extractRar(
                     archivePath,
                     path,
-                    "unrar",
+                    rarExtractor ?? "unrar",
                     (progress: number) => {
                       event.progress = progress;
                     },

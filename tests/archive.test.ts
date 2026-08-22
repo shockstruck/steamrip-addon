@@ -51,6 +51,35 @@ if (operands.length === 1) {
     );
   });
 
+  it("uses unar's own CLI flags when the extractor is unar", async () => {
+    const root = await mkdtemp(join(tmpdir(), "steamrip-unar-"));
+    temporaryDirectories.push(root);
+
+    const archivePath = join(root, "game.rar");
+    const destinationPath = join(root, "game");
+    const fakeUnarPath = join(root, "unar");
+    await writeFile(archivePath, "fixture");
+    await mkdir(destinationPath);
+    await writeFile(
+      fakeUnarPath,
+      `#!/usr/bin/env bun
+import { writeFile } from "fs/promises";
+import { join } from "path";
+
+await writeFile(join(process.cwd(), "args.json"), JSON.stringify(process.argv.slice(2)));
+`,
+    );
+    await chmod(fakeUnarPath, 0o755);
+
+    const result = await extractRar(archivePath, destinationPath, fakeUnarPath);
+    const args: string[] = await Bun.file(
+      join(destinationPath, "args.json"),
+    ).json();
+
+    expect(result.status).toBe(0);
+    expect(args).toEqual(["-f", "-D", archivePath]);
+  });
+
   it("reports monotonic extractor percentages and completes at 100", async () => {
     const root = await mkdtemp(join(tmpdir(), "steamrip-unrar-progress-"));
     temporaryDirectories.push(root);
