@@ -22,7 +22,6 @@
         "@types/node": "^24.3.1",
         "@types/node-notifier": "^8.0.5",
         "@types/prompts": "^2.4.9",
-        "@types/puppeteer": "^7.0.4",
         "typescript": "^5.9.2",
       },
     },

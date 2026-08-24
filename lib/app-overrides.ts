@@ -22,6 +22,37 @@ type SetupOverridesMap = Record<number, SetupOverrideValue>;
  * Example: override launch arguments for Lossless Scaling (steam app 993090).
  */
 const SETUP_OVERRIDES: SetupOverridesMap = {
+  // Palworld's WineGDK build needs to launch from its nested binary folder.
+  1623730: (context) => {
+    if (context.platform !== "linux") return {};
+
+    const gameDirectory = join(
+      context.installPath,
+      "Pal",
+      "Binaries",
+      "WineGDK",
+    );
+    const launchExecutable = join(
+      gameDirectory,
+      "Palworld-WinGDK-Shipping.exe",
+    );
+    const dllOverrides = readdirSync(gameDirectory, { withFileTypes: true })
+      .filter(
+        (entry) => entry.isFile() && entry.name.toLowerCase().endsWith(".dll"),
+      )
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .map((entry) => `${entry.name.replace(/\.dll$/i, "")}=n,b`);
+
+    return {
+      cwd: gameDirectory,
+      launchExecutable,
+      umu: {
+        umuId: `steam:${context.appID}`,
+        dllOverrides,
+      },
+    };
+  },
+
   // MECCHA CHAMELEON's Unreal bootstrapper falsely reports a missing VC++
   // runtime under Wine. Launch the game binary behind the wrapper instead.
   4704690: (context) => {
