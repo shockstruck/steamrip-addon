@@ -28,10 +28,10 @@ import {
   ScrapeGameDownloadsError,
   SteamSearchError,
 } from "./lib/errors";
-import { dirname, join, relative } from "path";
+import { basename, dirname, join, relative } from "path";
 import { spawnSync } from "child_process";
 import * as fs from "fs/promises";
-import { existsSync, type Stats } from "fs";
+import { existsSync } from "fs";
 import axios from "axios";
 import { Stream } from "stream";
 import { cloudflareSolve } from "./lib/cloudflare";
@@ -42,6 +42,14 @@ import {
   withSteamripReferer,
 } from "./lib/services/BaseService";
 import { applySetupOverrides } from "./lib/app-overrides";
+import {
+  candidateAbsolutePath,
+  decideGameFolder,
+  resolveExecutableChoice,
+  scanExecutables,
+  scoreCandidates,
+  type FolderEntry,
+} from "./lib/executable-detection";
 import {
   extractRar,
   extractWith7Zip,
@@ -851,109 +859,87 @@ const program = Effect.gen(function* () {
           catch: () => false,
         });
 
-        // now check: if there are at least 2 folders in the path, and one is the _CommonRedist folder and the other is the game folder
-        const folders = yield* Effect.tryPromise({
-          try: async () => await fs.readdir(path),
-          catch: () => [],
-        });
-        let autoFoundGameFolder = yield* pipe(
-          folders,
-          Effect.forEach(
-            (folder) =>
-              Effect.tryPromise({
-                try: async () =>
-                  [folder, await fs.stat(join(path, folder))] as [
-                    string,
-                    Stats,
-                  ],
-                catch: () => undefined,
+        // Decide whether the download's top level collapses to a single
+        // game folder without asking the user (flat layout, or exactly one
+        // non-noise directory), or whether it's genuinely ambiguous.
+        const archiveNames = [
+          file.name,
+          ...(multiPartFiles?.map((part) => part.name) ?? []),
+        ];
+        const topLevelEntries = yield* Effect.tryPromise({
+          try: async () => {
+            const dirents = await fs.readdir(path, { withFileTypes: true });
+            return dirents.map(
+              (dirent): FolderEntry => ({
+                name: dirent.name,
+                isDirectory: dirent.isDirectory(),
               }),
-            { concurrency: "unbounded" },
-          ),
-          // filter to only folders
-          Effect.map((folders) =>
-            folders.filter((folder) => folder && folder[1].isDirectory()),
-          ),
-          // Now check if there are 2 folders, and one is the _CommonRedist folder and the other is the game folder
-          Effect.map((folders) => {
-            if (folders.length !== 2) return undefined;
-            if (
-              folders.some((folder) => folder[0] === "_CommonRedist") &&
-              folders.some((folder) => folder[0] !== "_CommonRedist")
-            ) {
-              return folders.find(
-                (folder) => folder[0] !== "_CommonRedist",
-              )?.[0];
-            }
-            return undefined;
-          }),
-        );
+            );
+          },
+          catch: () => [] as FolderEntry[],
+        });
+        const folderDecision = decideGameFolder(topLevelEntries, archiveNames);
 
-        if (autoFoundGameFolder) {
+        let gameFolderEstablished = folderDecision.action !== "ambiguous";
+        let gameFolderName =
+          folderDecision.action === "collapse"
+            ? folderDecision.targetDir
+            : basename(path);
+
+        if (folderDecision.action === "collapse") {
+          const targetDir = folderDecision.targetDir;
           // move all the contents in that folder into the path
           yield* Effect.tryPromise({
             try: async () => {
-              const contents = await fs.readdir(
-                join(path, autoFoundGameFolder as string),
-              );
+              const contents = await fs.readdir(join(path, targetDir));
               for (const content of contents) {
                 await fs.rename(
-                  join(path, autoFoundGameFolder as string, content),
+                  join(path, targetDir, content),
                   join(path, content),
                 );
               }
-              await fs.rmdir(join(path, autoFoundGameFolder as string), {
+              await fs.rmdir(join(path, targetDir), {
                 recursive: true,
               });
               return undefined;
             },
             catch: () => {
-              console.log(
-                "Failed to move folder",
-                join(path, autoFoundGameFolder as string),
-              );
+              console.log("Failed to move folder", join(path, targetDir));
               return Effect.succeed(undefined);
             },
           });
         }
 
         let executables: string[] = [];
-        if (autoFoundGameFolder) {
+        if (gameFolderEstablished) {
           console.log(
-            "Auto found game folder",
-            autoFoundGameFolder,
+            "Game folder established at",
+            path,
             "Searching for executables...",
           );
-          executables = yield* pipe(
-            Effect.tryPromise({
-              try: async () => await fs.readdir(path),
-              catch: () => [],
-            }),
-            Effect.map((executables) =>
-              executables.filter((executable) => executable.endsWith(".exe")),
-            ),
-            // remove UnityCrashHandler
-            Effect.map((executables) =>
-              executables.filter(
-                (executable) =>
-                  !executable.toLowerCase().includes("unitycrashhandler"),
-              ),
-            ),
-            // remove uninstall00.exe
-            Effect.map((executables) =>
-              executables.filter(
-                (executable) =>
-                  !executable.toLowerCase().includes("unins000.exe"),
-              ),
-            ),
-            Effect.map((executables) =>
-              executables.map((executable) => join(path, executable)),
-            ),
+          const rawCandidates = yield* Effect.tryPromise({
+            try: async () => await scanExecutables(path, 4),
+            catch: () => [],
+          });
+          const scored = scoreCandidates(
+            rawCandidates,
+            appDetails?.name ?? "",
+            gameFolderName,
           );
-          console.log("Found executables", executables);
+          const { autoPick, ranked } = resolveExecutableChoice(scored);
+          console.log(
+            "Scored executables",
+            ranked.map((candidate) => [candidate.relPath, candidate.score]),
+          );
+          if (autoPick) {
+            executables = [candidateAbsolutePath(path, autoPick.relPath)];
+          } else {
+            executables = ranked.map((candidate) =>
+              candidateAbsolutePath(path, candidate.relPath),
+            );
+          }
           if (executables.length === 0) {
             event.log("No executables found in the game folder");
-            autoFoundGameFolder = undefined;
           }
         }
 
@@ -1028,7 +1014,7 @@ const program = Effect.gen(function* () {
               .setDefaultValue(true),
           );
         }
-        if (!autoFoundGameFolder) {
+        if (!gameFolderEstablished) {
           addedInput = true;
           inputAsk = inputAsk.addStringOption((option) =>
             option
@@ -1094,7 +1080,7 @@ const program = Effect.gen(function* () {
             { name: "xna40", path: "winetricks" },
           );
         }
-        if (autoFoundGameFolder) {
+        if (gameFolderEstablished) {
           input.cwd = path;
         }
 
