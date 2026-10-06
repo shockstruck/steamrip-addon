@@ -397,7 +397,9 @@ const program = Effect.gen(function* () {
       const game = bestScore >= SIMILARITY_THRESHOLD ? bestMatch : undefined;
 
       if (!game) {
-        console.log("No game found");
+        console.log(
+          `No SteamRIP match for "${steamResult.name}" (best "${bestMatch?.name ?? "none"}", score ${bestScore.toFixed(2)})`,
+        );
         return yield* Effect.fail(
           new NoGameFoundError({ query: String(appID) }),
         );
