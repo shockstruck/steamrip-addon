@@ -37,6 +37,7 @@ import { Stream } from "stream";
 import { cloudflareSolve } from "./lib/cloudflare";
 import { resolveSearchAlways } from "./lib/search-resolve";
 import { singleFlight } from "./lib/single-flight";
+import { createRefreshOnMiss } from "./lib/refresh-on-miss";
 import { headerManager } from "./lib/header-manager";
 import {
   connectRealBrowser,
@@ -165,6 +166,11 @@ const program = Effect.gen(function* () {
       yield* Effect.sync(() => search.addItems(scraper.catalog.games));
     }),
   );
+
+  const refreshOnMiss = createRefreshOnMiss({
+    getLastUpdated: () => scraper.catalog.lastUpdated,
+    refresh: () => refreshSteamripCatalog(true),
+  });
 
   addon.on("connect", (event) => {
     const connectEffect = Effect.fn("connectEffect")(function* () {
@@ -386,21 +392,28 @@ const program = Effect.gen(function* () {
         yield* refreshSteamripCatalog(true);
       }
 
-      // Find the game with the highest name similarity to the Steam result
-      let bestMatch: { name: string; url: string } | undefined;
-      let bestScore = 0;
-      for (const candidate of scraper.catalog.games) {
-        const score = stringSimilarity(candidate.name, steamResult.name);
-        if (score > bestScore) {
-          bestScore = score;
-          bestMatch = candidate;
-        }
-      }
-
       // Require a minimum similarity to consider it a valid match
       const SIMILARITY_THRESHOLD = 0.6;
-      console.log("Best score", bestScore);
-      const game = bestScore >= SIMILARITY_THRESHOLD ? bestMatch : undefined;
+      let bestMatch: { name: string; url: string } | undefined;
+      let bestScore = 0;
+      // Find the game with the highest name similarity to the Steam result
+      const findGame = () => {
+        bestMatch = undefined;
+        bestScore = 0;
+        for (const candidate of scraper.catalog.games) {
+          const score = stringSimilarity(candidate.name, steamResult.name);
+          if (score > bestScore) {
+            bestScore = score;
+            bestMatch = candidate;
+          }
+        }
+        console.log("Best score", bestScore);
+        return bestScore >= SIMILARITY_THRESHOLD ? bestMatch : undefined;
+      };
+
+      // A miss on a stale catalog refreshes once (forced, since upgradeLocals
+      // would otherwise skip a catalog under 24h old) and matches again.
+      const game = yield* refreshOnMiss(findGame);
 
       if (!game) {
         console.log(

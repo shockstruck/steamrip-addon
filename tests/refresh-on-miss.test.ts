@@ -64,21 +64,13 @@ describe("refreshOnMiss", () => {
 
   it("does not re-scrape for a second miss inside the cooldown", async () => {
     const t = setup(1_000_000_000 - STALE_AFTER_MS - 1);
-    // A scrape that finds nothing new leaves lastUpdated stale.
-    const refreshOnMiss = createRefreshOnMiss({
-      getLastUpdated: () => t.catalog.lastUpdated,
-      refresh: Effect.sync(() => {
-        t.catalog.games = OLD;
-      }).pipe(Effect.tap(() => Effect.sync(() => void 0))),
-      now: () => t.now.value,
-    });
     let calls = 0;
     const counted = createRefreshOnMiss({
       getLastUpdated: () => t.catalog.lastUpdated,
-      refresh: Effect.sync(() => void calls++),
+      refresh: () => Effect.sync(() => void calls++),
       now: () => t.now.value,
     });
-    void refreshOnMiss;
+    // The stubbed scrape finds nothing new, so lastUpdated stays stale.
     await Effect.runPromise(counted(() => undefined));
     t.now.value += COOLDOWN_MS - 1;
     await Effect.runPromise(counted(() => undefined));
@@ -108,7 +100,7 @@ describe("refreshOnMiss", () => {
     const t = setup(1_000_000_000 - STALE_AFTER_MS - 1);
     const failing = createRefreshOnMiss({
       getLastUpdated: () => t.catalog.lastUpdated,
-      refresh: Effect.fail(new Error("scrape failed")),
+      refresh: () => Effect.fail(new Error("scrape failed")),
       now: () => t.now.value,
     });
     expect(await Effect.runPromise(failing(t.find("Brand New Game")))).toBeUndefined();
