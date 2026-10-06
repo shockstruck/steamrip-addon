@@ -13,7 +13,7 @@ import {
   type DownloadLink,
 } from "./lib/services/matcher";
 import FileCryptService from "./lib/services/FileCrypt";
-import { Context, Effect, Layer, Match, pipe } from "effect";
+import { Cause, Context, Effect, Layer, Match, pipe } from "effect";
 import { BunRuntime } from "@effect/platform-bun";
 import {
   CommonRedistError,
@@ -35,6 +35,8 @@ import { existsSync } from "fs";
 import axios from "axios";
 import { Stream } from "stream";
 import { cloudflareSolve } from "./lib/cloudflare";
+import { resolveSearchAlways } from "./lib/search-resolve";
+import { singleFlight } from "./lib/single-flight";
 import { headerManager } from "./lib/header-manager";
 import {
   connectRealBrowser,
@@ -144,23 +146,31 @@ const program = Effect.gen(function* () {
     }).pipe(Effect.runPromise),
   );
 
-  const refreshSteamripCatalog = Effect.fn("refreshSteamripCatalog")(function* (
-    force: boolean = false,
-  ) {
-    yield* headerManager.loadHeaders();
-    yield* pipe(
-      cloudflareSolve("https://steamrip.com", addon),
-      Effect.catchAll((error) => {
-        console.error("Background Cloudflare solve failed:", error);
-        return Effect.succeed(undefined);
-      }),
-    );
+  // Single-flight: a search-triggered refresh joins an in-flight background
+  // refresh instead of opening a second browser session.
+  let refreshForce = false;
+  const refreshOnce = singleFlight(
+    Effect.gen(function* () {
+      yield* headerManager.loadHeaders();
+      yield* pipe(
+        cloudflareSolve("https://steamrip.com", addon),
+        Effect.catchAll((error) => {
+          console.error("Background Cloudflare solve failed:", error);
+          return Effect.succeed(undefined);
+        }),
+      );
 
-    yield* scraper.cleanupExpiredScrapes();
-    yield* scraper.upgradeLocals(force);
-    yield* scraper.processLocals();
-    yield* Effect.sync(() => search.addItems(scraper.catalog.games));
-  });
+      yield* scraper.cleanupExpiredScrapes();
+      yield* scraper.upgradeLocals(refreshForce);
+      yield* scraper.processLocals();
+      yield* Effect.sync(() => search.addItems(scraper.catalog.games));
+    }),
+  );
+  const refreshSteamripCatalog = (force: boolean = false) =>
+    Effect.suspend(() => {
+      refreshForce = force;
+      return refreshOnce;
+    });
 
   addon.on("connect", (event) => {
     const connectEffect = Effect.fn("connectEffect")(function* () {
@@ -168,6 +178,25 @@ const program = Effect.gen(function* () {
         try: () => addon.task(),
         catch: () => new Error("Failed to create task"), // Define a specific error if needed
       });
+
+      // Load the cached catalog before any check that can stop connect, so a
+      // failed check still leaves searches with a usable catalog.
+      yield* Effect.sync(() => task.log("Loading cached Steamrip catalog..."));
+      const loadedCachedCatalog = yield* scraper.processLocalsIfPresent();
+      if (loadedCachedCatalog) {
+        yield* Effect.sync(() => search.addItems(scraper.catalog.games));
+        yield* Effect.sync(() =>
+          task.log(
+            `Loaded ${scraper.catalog.games.length} cached Steamrip games.`,
+          ),
+        );
+      } else {
+        yield* Effect.sync(() =>
+          task.log(
+            "No cached Steamrip catalog found; first search may take longer.",
+          ),
+        );
+      }
 
       // check if the system is online first, and if not, then abort mission!
       console.log("Checking online...");
@@ -274,23 +303,6 @@ const program = Effect.gen(function* () {
       yield* Effect.sync(() => task.log("Chrome is installed on the device."));
       yield* Effect.promise(async () => chromeInstalled.browser.close());
 
-      yield* Effect.sync(() => task.log("Loading cached Steamrip catalog..."));
-      const loadedCachedCatalog = yield* scraper.processLocalsIfPresent();
-      if (loadedCachedCatalog) {
-        yield* Effect.sync(() => search.addItems(scraper.catalog.games));
-        yield* Effect.sync(() =>
-          task.log(
-            `Loaded ${scraper.catalog.games.length} cached Steamrip games.`,
-          ),
-        );
-      } else {
-        yield* Effect.sync(() =>
-          task.log(
-            "No cached Steamrip catalog found; first search may take longer.",
-          ),
-        );
-      }
-
       const stats = yield* scraper.getScrapeStats();
       yield* Effect.sync(() =>
         task.log(
@@ -313,11 +325,11 @@ const program = Effect.gen(function* () {
               }),
             ),
           ),
-          Effect.catchAll((error) =>
+          Effect.catchAllCause((cause) =>
             Effect.sync(() => {
               console.error(
                 "Background Steamrip catalog refresh failed:",
-                error,
+                Cause.pretty(cause),
               );
               addon.notify({
                 message:
@@ -462,35 +474,40 @@ const program = Effect.gen(function* () {
       return resolutions;
     });
 
-    pipe(
-      searchEffect(),
-      Effect.catchTags({
-        NoGameFoundError: (e: NoGameFoundError) => {
-          console.log("No game found", e);
-          return Effect.succeed([]);
+    resolveSearchAlways(
+      pipe(
+        searchEffect(),
+        Effect.catchTags({
+          NoGameFoundError: (e: NoGameFoundError) => {
+            console.log("No game found", e);
+            return Effect.succeed([] as SearchResult[]);
+          },
+          SteamSearchError: (e: SteamSearchError) => {
+            console.log("Steam search error", e);
+            return Effect.succeed([] as SearchResult[]);
+          },
+        }),
+      ),
+      {
+        resolve: (res) => event.resolve(res),
+        onCause: (cause) => {
+          console.error("Search error:", Cause.pretty(cause));
+          const error = Cause.squash(cause);
+          if (
+            error instanceof Error &&
+            error.message &&
+            error.message.includes("No valid Cloudflare headers")
+          ) {
+            addon.notify({
+              message:
+                "Cloudflare headers are missing. Please reconnect to solve Cloudflare protection.",
+              id: "cloudflare-headers-missing",
+              type: "warning",
+            });
+          }
         },
-        SteamSearchError: (e: SteamSearchError) => {
-          console.log("Steam search error", e);
-          return Effect.succeed([]);
-        },
-      }),
-      Effect.catchAll((error: unknown) => {
-        console.error("Search error:", error);
-        if (
-          error instanceof Error &&
-          error.message &&
-          error.message.includes("No valid Cloudflare headers")
-        ) {
-          addon.notify({
-            message:
-              "Cloudflare headers are missing. Please reconnect to solve Cloudflare protection.",
-            id: "cloudflare-headers-missing",
-            type: "warning",
-          });
-        }
-        return Effect.succeed([]);
-      }),
-      Effect.andThen((res) => event.resolve(res)),
+      },
+    ).pipe(
       Effect.runFork,
     );
   });

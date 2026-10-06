@@ -3,6 +3,7 @@ import type OGIAddon from "ogi-addon";
 import { headerManager, convertPuppeteerCookies } from "./header-manager";
 import { isCloudflareChallenge } from "./steamrip-fetch";
 import axios from "axios";
+import { CloudflareSolveError } from "./errors";
 import type { Page } from "puppeteer";
 import type { PageWithCursor } from "puppeteer-real-browser";
 import { connectRealBrowser, navigateBrowserPage, PUPPETEER_OPTIONS } from "./services/BaseService";
@@ -270,7 +271,7 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
         type: 'error',
       }));
 
-      throw new Error('Failed to solve Cloudflare captcha');
+      return yield* Effect.fail(new CloudflareSolveError({ message: 'Failed to solve Cloudflare captcha' }));
     } else {
       // Capture all headers from the visible page
       const headers = yield* captureBrowserHeaders(activeVisiblePage, visibleCapturedHeaders);
@@ -295,7 +296,7 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
           catch: () => new Error('Failed to close browser')
         });
 
-        throw new Error('No Cloudflare cookies found after solve');
+        return yield* Effect.fail(new CloudflareSolveError({ message: 'No Cloudflare cookies found after solve' }));
       }
 
       // Store all headers
@@ -372,7 +373,7 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
         type: 'error',
       }));
 
-      throw new Error('Failed to solve Cloudflare captcha');
+      return yield* Effect.fail(new CloudflareSolveError({ message: 'Failed to solve Cloudflare captcha' }));
     } else {
       // Capture all headers from the visible page
       const headers = yield* captureBrowserHeaders(activeVisiblePage, visibleCapturedHeaders);
@@ -397,7 +398,7 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
           catch: () => new Error('Failed to close browser')
         });
         
-        throw new Error('No Cloudflare cookies found after solve');
+        return yield* Effect.fail(new CloudflareSolveError({ message: 'No Cloudflare cookies found after solve' }));
       }
 
       // Store all headers
@@ -436,7 +437,7 @@ export const cloudflareSolve = (url: string, addon: OGIAddon) => Effect.gen(func
       catch: () => new Error('Failed to close headless browser')
     });
     
-    throw new Error('No Cloudflare cookies found after headless solve');
+    return yield* Effect.fail(new CloudflareSolveError({ message: 'No Cloudflare cookies found after headless solve' }));
   }
   
   // Store all headers

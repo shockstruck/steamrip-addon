@@ -98,3 +98,12 @@ export class MegaDBError extends Data.TaggedError('MegaDBError')<{
 }> {}
 
 export class NotOnlineError extends Data.TaggedError('NotOnlineError')<{}> {}
+
+export class CloudflareSolveError extends Data.TaggedError('CloudflareSolveError')<{
+  message: string;
+}> {}
+
+export class CatalogParseError extends Data.TaggedError('CatalogParseError')<{
+  path: string;
+  error: unknown;
+}> {}

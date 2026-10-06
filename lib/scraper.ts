@@ -1,7 +1,7 @@
 import { JSDOM } from 'jsdom';
 import * as fs from 'fs/promises';
 import { Effect } from 'effect';
-import { FileSystemError, NetworkError, ScraperError } from './errors';
+import { CatalogParseError, FileSystemError, NetworkError, ScraperError } from './errors';
 import { headerManager } from './header-manager';
 import { fetchSteamripHtml } from './steamrip-fetch';
 import { join } from 'path';
@@ -36,9 +36,12 @@ export function parseSteamripGameDetails(html: string): SteamripGameDetails {
 
 export default class Scraper {
   public catalog: { games: { name: string, url: string }[], lastUpdated: number } = { games: [], lastUpdated: 0 };
-  private scrapesDir = 'steamrip-scrapes';
+  private scrapesDir: string;
+  private catalogPath: string;
   
-  constructor() {
+  constructor(options: { catalogPath?: string; scrapesDir?: string } = {}) {
+    this.scrapesDir = options.scrapesDir ?? 'steamrip-scrapes';
+    this.catalogPath = options.catalogPath ?? 'catalog.json';
     // Initialize directory creation
     Effect.runPromise(this.ensureScrapesDirectory()).catch(error => {
       console.error('Failed to create scrapes directory:', error);
@@ -217,10 +220,7 @@ export default class Scraper {
         games: games,
         lastUpdated: Date.now()
       };
-      yield* Effect.tryPromise({
-        try: () => fs.writeFile('catalog.json', JSON.stringify(catalogObject, null, 2)),
-        catch: (error) => new FileSystemError({ path: 'catalog.json', error })
-      });
+      yield* this.writeCatalog(catalogObject);
       console.log('catalog.json updated');
     }.bind(this));
   }
@@ -251,13 +251,36 @@ export default class Scraper {
     );
   }
 
-  processLocals(): Effect.Effect<void, FileSystemError> {
+  // Write to a temp file and rename so a crash never leaves a half-written catalog.
+  writeCatalog(catalog: { games: unknown[]; lastUpdated: number }): Effect.Effect<void, FileSystemError> {
+    const tmpPath = `${this.catalogPath}.tmp`;
+    return Effect.tryPromise({
+      try: async () => {
+        await fs.writeFile(tmpPath, JSON.stringify(catalog, null, 2));
+        await fs.rename(tmpPath, this.catalogPath);
+      },
+      catch: (error) => new FileSystemError({ path: this.catalogPath, error })
+    }).pipe(
+      Effect.tapError(() => Effect.promise(() => fs.rm(tmpPath, { force: true }).catch(() => {})))
+    );
+  }
+
+  processLocals(): Effect.Effect<void, FileSystemError | CatalogParseError> {
     return Effect.gen(function*(this: Scraper) {
       const catalogContent = yield* Effect.tryPromise({
-        try: () => fs.readFile('catalog.json', 'utf8'),
-        catch: (error) => new FileSystemError({ path: 'catalog.json', error })
+        try: () => fs.readFile(this.catalogPath, 'utf8'),
+        catch: (error) => new FileSystemError({ path: this.catalogPath, error })
       });
-      this.catalog = JSON.parse(catalogContent);
+      this.catalog = yield* Effect.try({
+        try: () => {
+          const parsed = JSON.parse(catalogContent);
+          if (!parsed || !Array.isArray(parsed.games) || typeof parsed.lastUpdated !== 'number') {
+            throw new Error('catalog has an unexpected shape');
+          }
+          return parsed as Scraper['catalog'];
+        },
+        catch: (error) => new CatalogParseError({ path: this.catalogPath, error })
+      });
     }.bind(this));
   }
 
