@@ -54,6 +54,10 @@ import {
   type FolderEntry,
 } from "./lib/executable-detection";
 import {
+  classifySetupSource,
+  resolveLocalArchive,
+} from "./lib/local-archive";
+import {
   extractRar,
   extractWith7Zip,
   resolveRarExtractor,
@@ -480,6 +484,16 @@ const program = Effect.gen(function* () {
         },
       ] as SearchResult[];
 
+      // Offer installing from an archive the user already downloaded in a
+      // browser; `empty` goes straight to setup, which asks for the file.
+      if (forType !== "update") {
+        resolutions.push({
+          name: `${game.name} (install from downloaded archive)`,
+          downloadType: "empty",
+          manifest: { url: game.url, source: "local" },
+        } as SearchResult);
+      }
+
       return resolutions;
     });
 
@@ -731,10 +745,12 @@ const program = Effect.gen(function* () {
   addon.on(
     "setup",
     ({ path, type, multiPartFiles, appID, manifest, for: forType }, event) => {
-      if (type === "empty") {
+      const setupSource = classifySetupSource(type, manifest);
+      if (setupSource === "already-downloaded") {
         event.fail("Game already downloaded.");
         return;
       }
+      const ownsArchive = setupSource !== "local-archive";
       event.log(`Setup: path: ${path}, multiPartFiles: ${multiPartFiles}`);
       event.defer();
       const setupEffect = Effect.fn("setupEffect")(function* () {
@@ -743,17 +759,60 @@ const program = Effect.gen(function* () {
           "7-Zip",
           "7z.exe",
         );
-        const file = multiPartFiles?.[0];
-        if (!file) return yield* Effect.fail(new NoFileFoundError());
+        // A download's archive lives in `path` and is ours to clean up; a
+        // local archive is the user's own file and is only ever read.
+        let archivePath: string;
+        let file: { name: string };
+        if (ownsArchive) {
+          const downloaded = multiPartFiles?.[0];
+          if (!downloaded) return yield* Effect.fail(new NoFileFoundError());
+          file = downloaded;
+          archivePath = join(path, downloaded.name);
+        } else {
+          const answer = yield* Effect.tryPromise({
+            try: () =>
+              event.askForInput(
+                "Choose your downloaded archive",
+                "Select the archive you downloaded from your browser (.rar, .zip or .7z). For a multi-part set, pick the first part. Your file is not moved or deleted.",
+                new ConfigurationBuilder().addStringOption((option) =>
+                  option
+                    .setName("archive")
+                    .setDisplayName("Archive")
+                    .setDescription("Path to the downloaded archive.")
+                    .setInputType("file")
+                    .setDefaultValue(""),
+                ),
+              ),
+            catch: () => new InputError({ error: "Failed to ask for input" }),
+          });
+          archivePath = yield* Effect.tryPromise({
+            try: async () => {
+              const resolved = await resolveLocalArchive(
+                String(answer.archive ?? ""),
+              );
+              // EmptyService does not create the folder and the extractor
+              // runs with it as its working directory.
+              await fs.mkdir(path, { recursive: true });
+              return resolved;
+            },
+            catch: (error) =>
+              new InputError({
+                error: error instanceof Error ? error.message : String(error),
+              }),
+          });
+          file = { name: basename(archivePath) };
+        }
 
         const showErrorScreen = async (details?: string) => {
           await event.askForInput(
             "Archive extraction failed",
             "The download may be incomplete, or the installed RAR extractor may not support this archive." +
               (details ? ` Extractor details: ${details}` : "") +
-              " Go to the path: \"" +
-              path +
-              '" and delete the archive before trying the download again.',
+              (ownsArchive
+                ? " Go to the path: \"" +
+                  path +
+                  '" and delete the archive before trying the download again.'
+                : " Your original archive was not modified. Check it is complete and try again."),
             new ConfigurationBuilder(),
           );
         };
@@ -769,7 +828,7 @@ const program = Effect.gen(function* () {
           try: async () => await fs.readdir(path),
           catch: () => [],
         });
-        if (files.length > 1) {
+        if (ownsArchive && files.length > 1) {
           event.log("Found other files in the path, deleting them...");
           for (const fileName of files) {
             if (fileName !== file.name) {
@@ -804,7 +863,6 @@ const program = Effect.gen(function* () {
           process.platform === "darwin" ||
           process.platform === "linux"
         ) {
-          const archivePath = join(path, file.name);
           const rarExtractor =
             process.platform === "win32" ? null : resolveRarExtractor();
           if (process.platform !== "win32" && !rarExtractor) {
@@ -888,10 +946,9 @@ const program = Effect.gen(function* () {
         // Decide whether the download's top level collapses to a single
         // game folder without asking the user (flat layout, or exactly one
         // non-noise directory), or whether it's genuinely ambiguous.
-        const archiveNames = [
-          file.name,
-          ...(multiPartFiles?.map((part) => part.name) ?? []),
-        ];
+        const archiveNames = ownsArchive
+          ? [file.name, ...(multiPartFiles?.map((part) => part.name) ?? [])]
+          : [];
         const topLevelEntries = yield* Effect.tryPromise({
           try: async () => {
             const dirents = await fs.readdir(path, { withFileTypes: true });
@@ -1129,20 +1186,22 @@ const program = Effect.gen(function* () {
         // }
 
         // then remove the download path
-        yield* Effect.tryPromise({
-          try: async () =>
-            await fs.rm(join(path, file.name), {
-              maxRetries: 3,
-              retryDelay: 1000,
-            }),
-          catch: () => {
-            console.log(
-              "Failed to auto remove download path",
-              join(path, file.name),
-            );
-            return Effect.succeed(undefined);
-          },
-        });
+        if (ownsArchive) {
+          yield* Effect.tryPromise({
+            try: async () =>
+              await fs.rm(join(path, file.name), {
+                maxRetries: 3,
+                retryDelay: 1000,
+              }),
+            catch: () => {
+              console.log(
+                "Failed to auto remove download path",
+                join(path, file.name),
+              );
+              return Effect.succeed(undefined);
+            },
+          });
+        }
 
         let winedlls: string[] = [];
         // Get all dll files in the folder and use those
