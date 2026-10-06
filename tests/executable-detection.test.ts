@@ -89,6 +89,8 @@ describe("isBlockedExecutable", () => {
     "AntiCheatExpert_BE.exe",
     "EasyAntiCheat.exe",
     "dotNetFx40Setup.exe",
+    "start_protected_game.exe",
+    "Start_Protected_Game.exe",
   ];
 
   it.each(blocked)("blocks %s", (name) => {
@@ -115,6 +117,13 @@ describe("isBlockedPath", () => {
     ).toBe(true);
     expect(
       isBlockedPath("Engine/Binaries/Win64/CrashReportClient.exe"),
+    ).toBe(true);
+  });
+
+  it("blocks Unreal Engine helper executables that are not the game", () => {
+    expect(isBlockedPath("Engine/Binaries/Win64/EpicWebHelper.exe")).toBe(true);
+    expect(
+      isBlockedPath("Game/Engine/Binaries/Win64/CrashReportClient.exe"),
     ).toBe(true);
   });
 
@@ -383,6 +392,65 @@ describe("scanExecutables + scoring pipeline (synthetic fixtures on disk)", () =
       expect(relPaths).not.toContain(join("_CommonRedist", "vcredist_x64.exe"));
       expect(relPaths).not.toContain(join("a", "b", "c", "d", "e", "TooDeep.exe"));
       expect(relPaths).toContain(join("a", "b", "JustRight.exe"));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("anti-cheat bootstrapper and engine helpers", () => {
+  const gui = { machine: MACHINE_X64, isDll: false, subsystem: 2 };
+  const exe = (relPath: string, size: number): ExecutableCandidate => ({
+    relPath,
+    size,
+    pe: gui,
+  });
+
+  it("auto-picks the real game binary for the Gears of War: E-Day layout", () => {
+    const candidates = [
+      exe("start_protected_game.exe", 3_900_000),
+      exe("FairlightConcept/Binaries/Win64/GoWEDay-Steam.exe", 113_000_000),
+      exe("Engine/Binaries/Win64/EpicWebHelper.exe", 2_000_000),
+      exe("EasyAntiCheat/EasyAntiCheat_EOS_Setup.exe", 1_000_000),
+      exe("Engine/Extras/Redist/en-us/GamingRepair.exe", 1_000_000),
+      exe("Engine/Binaries/Win64/crashpad_handler.exe", 1_000_000),
+    ];
+    const scored = scoreCandidates(
+      candidates,
+      "Gears of War: E-Day",
+      "Gears of War - E-Day",
+    );
+    expect(scored.map((c) => c.relPath)).toEqual([
+      "FairlightConcept/Binaries/Win64/GoWEDay-Steam.exe",
+    ]);
+    expect(resolveExecutableChoice(scored).autoPick?.relPath).toBe(
+      "FairlightConcept/Binaries/Win64/GoWEDay-Steam.exe",
+    );
+  });
+
+  it("still treats a game whose real exe is named *Launcher.exe as before", () => {
+    const scored = scoreCandidates(
+      [exe("Neon Drift Launcher.exe", 5000)],
+      "Neon Drift",
+      "Neon Drift",
+    );
+    expect(scored).toHaveLength(1);
+    expect(resolveExecutableChoice(scored).autoPick?.relPath).toBe(
+      "Neon Drift Launcher.exe",
+    );
+  });
+
+  it("yields no candidates for a folder with only start_protected_game.exe", async () => {
+    const root = await mkdtemp(join(tmpdir(), "steamrip-exe-eac-"));
+    try {
+      await writeFile(join(root, "start_protected_game.exe"), buildPEBuffer({}));
+      const candidates = await scanExecutables(root, 4);
+      expect(candidates).toEqual([]);
+      const choice = resolveExecutableChoice(
+        scoreCandidates(candidates, "Some Game", "Some Game"),
+      );
+      expect(choice.autoPick).toBeNull();
+      expect(choice.ranked).toEqual([]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

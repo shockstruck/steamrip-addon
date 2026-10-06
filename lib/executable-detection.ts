@@ -71,6 +71,10 @@ const BLOCKLIST_GLOBS = [
   "ueprereqsetup*",
   "*_be.exe",
   "easyanticheat*",
+  // EAC/EOS bootstrapper: it starts anti-cheat and does not launch the game
+  // under Proton, so it must never be offered as the game executable.
+  "start_protected_game*",
+  "*crashreportclient*",
   "dotnet*setup*",
 ];
 
@@ -88,6 +92,8 @@ const BLOCKED_PATH_PATTERNS = [
   /(^|\/)Engine\/Extras(\/|$)/i,
   /(^|\/)Engine\/Binaries\/ThirdParty(\/|$)/i,
   /(^|\/)Engine\/Binaries\/Win64\/[^/]*CrashReport[^/]*(\/|$)/i,
+  // Unreal's embedded-browser helper, not the game.
+  /(^|\/)Engine\/Binaries\/Win64\/EpicWebHelper[^/]*(\/|$)/i,
 ];
 
 export function isBlockedExecutable(fileName: string): boolean {
