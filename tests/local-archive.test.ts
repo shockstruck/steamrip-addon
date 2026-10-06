@@ -99,6 +99,15 @@ describe("resolveLocalArchive", () => {
     );
   });
 
+  it("resolves a picked .r00 volume to the sibling .rar", async () => {
+    const root = await makeRoot();
+    await writeFile(join(root, "game.rar"), "x");
+    await writeFile(join(root, "game.r00"), "x");
+    expect(await resolveLocalArchive(join(root, "game.r00"))).toBe(
+      join(root, "game.rar"),
+    );
+  });
+
   it("rejects a missing file", async () => {
     const root = await makeRoot();
     await expect(resolveLocalArchive(join(root, "nope.rar"))).rejects.toThrow(
