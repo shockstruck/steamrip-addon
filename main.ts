@@ -12,6 +12,10 @@ import {
   stringSimilarity,
   type DownloadLink,
 } from "./lib/services/matcher";
+import {
+  buildSearchResults,
+  resolveSteamripInfo,
+} from "./lib/search-results";
 import FileCryptService from "./lib/services/FileCrypt";
 import { Cause, Context, Effect, Layer, Match, pipe } from "effect";
 import { BunRuntime } from "@effect/platform-bun";
@@ -423,9 +427,12 @@ const program = Effect.gen(function* () {
         console.log(
           `No SteamRIP match for "${steamResult.name}" (best "${bestMatch?.name ?? "none"}", score ${bestScore.toFixed(2)})`,
         );
-        return yield* Effect.fail(
-          new NoGameFoundError({ query: String(appID) }),
-        );
+        // The local-archive option needs no catalog match; an update does.
+        return buildSearchResults({
+          game: undefined,
+          steamName: steamResult.name,
+          forType,
+        }) as SearchResult[];
       }
 
       console.log("Found game", game.name);
@@ -474,37 +481,19 @@ const program = Effect.gen(function* () {
           }
         }
       }
-      const resolutions = [
-        {
-          name: game.name,
-          downloadType: "request",
-          manifest: {
-            url: game.url,
-          },
-        },
-      ] as SearchResult[];
-
-      // Offer installing from an archive the user already downloaded in a
-      // browser; `empty` goes straight to setup, which asks for the file.
-      if (forType !== "update") {
-        resolutions.push({
-          name: `${game.name} (install from downloaded archive)`,
-          downloadType: "empty",
-          manifest: { url: game.url, source: "local" },
-        } as SearchResult);
-      }
-
-      return resolutions;
+      // Also offers installing from an archive the user already downloaded in
+      // a browser; `empty` goes straight to setup, which asks for the file.
+      return buildSearchResults({
+        game,
+        steamName: steamResult.name,
+        forType,
+      }) as SearchResult[];
     });
 
     resolveSearchAlways(
       pipe(
         searchEffect(),
         Effect.catchTags({
-          NoGameFoundError: (e: NoGameFoundError) => {
-            console.log("No game found", e);
-            return Effect.succeed([] as SearchResult[]);
-          },
           SteamSearchError: (e: SteamSearchError) => {
             console.log("Steam search error", e);
             return Effect.succeed([] as SearchResult[]);
@@ -1216,36 +1205,18 @@ const program = Effect.gen(function* () {
 
         // write to the game install cwd a "steamrip-info.json"
 
-        const gameDetails = yield* manifest
-          ? pipe(
-              scraper.scrapeGameDetails(manifest.url as string),
-              Effect.catchAll((error) => {
-                console.error(
-                  "Failed to get app details",
-                  manifest?.url,
-                  error,
-                );
-                return Effect.succeed({
-                  title: undefined,
-                  version: undefined,
-                });
-              }),
-            )
-          : Effect.succeed({ title: undefined, version: undefined });
+        const steamripInfo = yield* resolveSteamripInfo({
+          url: typeof manifest?.url === "string" ? manifest.url : undefined,
+          steamName:
+            typeof appDetails?.name === "string" ? appDetails.name : undefined,
+          scrapeGameDetails: (url) => scraper.scrapeGameDetails(url),
+        });
 
         yield* Effect.tryPromise({
           try: async () =>
             await fs.writeFile(
               join(input.cwd as string, "steamrip-info.json"),
-              JSON.stringify(
-                {
-                  title: gameDetails.title ?? "unknown",
-                  version: gameDetails.version,
-                  url: manifest?.url,
-                },
-                null,
-                2,
-              ),
+              JSON.stringify(steamripInfo, null, 2),
             ),
           catch: () => {
             console.log(
