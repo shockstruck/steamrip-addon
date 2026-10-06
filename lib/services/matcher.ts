@@ -67,10 +67,19 @@ const SOFT_QUALIFIERS = new Set([
   "enhanced",
   "gold",
   "goty",
+  "hd",
   "premium",
+  "remake",
+  "remaster",
+  "remastered",
   "ultimate",
   "windows",
 ]);
+
+// Applied when only one title carries a number. A trailing number is a
+// sequel ("Portal 2"); an interior one is usually a naming difference.
+const TRAILING_NUMBER_PENALTY = 0.75;
+const INTERIOR_NUMBER_PENALTY = 0.9;
 
 type NormalizedTitle = {
   tokens: string[];
@@ -94,6 +103,8 @@ const titleVariants = (title: string): string[] => {
 
 const normalizeTitle = (title: string): NormalizedTitle => {
   const prepared = title
+    // NFKD would otherwise turn ™ into "TM" glued onto the preceding word.
+    .replace(/[™®©℠]/g, "")
     .normalize("NFKD")
     .replace(/\p{M}/gu, "")
     .replace(/[’'`]/g, "")
@@ -136,6 +147,19 @@ const normalizeTitle = (title: string): NormalizedTitle => {
     sequenceNumbers: coreTokens.filter((token) => /^\d+$/.test(token)),
   };
 };
+
+// Only the one-sided number penalty below needs word order: a number tucked
+// between two other core words ("Yakuza 7 Like a Dragon") is a naming
+// difference, while a trailing one ("Portal 2") is a different game.
+const hasOnlyInteriorNumbers = (title: NormalizedTitle): boolean =>
+  title.coreTokens.every(
+    (token, index) =>
+      !/^\d+$/.test(token) ||
+      (title.coreTokens.slice(0, index).some((other) => !/^\d+$/.test(other)) &&
+        title.coreTokens
+          .slice(index + 1)
+          .some((other) => !/^\d+$/.test(other))),
+  );
 
 const characterSimilarity = (left: string, right: string): number => {
   if (left === right) return 1;
@@ -240,7 +264,10 @@ const scoreNormalizedTitles = (
     (left.sequenceNumbers.length > 0) !==
     (right.sequenceNumbers.length > 0)
   ) {
-    score *= 0.75;
+    const numbered = left.sequenceNumbers.length > 0 ? left : right;
+    score *= hasOnlyInteriorNumbers(numbered)
+      ? INTERIOR_NUMBER_PENALTY
+      : TRAILING_NUMBER_PENALTY;
   }
 
   return score * qualifierModifier(left.qualifiers, right.qualifiers);
