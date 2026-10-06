@@ -148,8 +148,7 @@ const program = Effect.gen(function* () {
 
   // Single-flight: a search-triggered refresh joins an in-flight background
   // refresh instead of opening a second browser session.
-  let refreshForce = false;
-  const refreshOnce = singleFlight(
+  const refreshSteamripCatalog = singleFlight((force: boolean = false) =>
     Effect.gen(function* () {
       yield* headerManager.loadHeaders();
       yield* pipe(
@@ -161,16 +160,11 @@ const program = Effect.gen(function* () {
       );
 
       yield* scraper.cleanupExpiredScrapes();
-      yield* scraper.upgradeLocals(refreshForce);
+      yield* scraper.upgradeLocals(force);
       yield* scraper.processLocals();
       yield* Effect.sync(() => search.addItems(scraper.catalog.games));
     }),
   );
-  const refreshSteamripCatalog = (force: boolean = false) =>
-    Effect.suspend(() => {
-      refreshForce = force;
-      return refreshOnce;
-    });
 
   addon.on("connect", (event) => {
     const connectEffect = Effect.fn("connectEffect")(function* () {

@@ -1,22 +1,26 @@
 import { Effect, Exit } from 'effect';
 
 /**
- * Wraps an effect so concurrent callers share one run. A caller that arrives
- * while a run is in flight waits for it and receives the same exit; once it
- * settles, the next call starts a fresh run.
+ * Wraps an effect factory so concurrent callers share one run. The first
+ * caller's arguments start the run; a caller that arrives while it is in
+ * flight waits for it and receives the same exit, and its own arguments are
+ * ignored. Once the run settles, the next call starts a fresh one.
  */
-export const singleFlight = <A, E>(
-  effect: Effect.Effect<A, E>,
-): Effect.Effect<A, E> => {
+export const singleFlight = <Args extends unknown[], A, E>(
+  make: (...args: Args) => Effect.Effect<A, E>,
+): ((...args: Args) => Effect.Effect<A, E>) => {
   let inFlight: Promise<Exit.Exit<A, E>> | undefined;
-  return Effect.suspend(() => {
-    if (!inFlight) {
-      const run = Effect.runPromiseExit(effect);
-      inFlight = run;
-      void run.finally(() => {
-        if (inFlight === run) inFlight = undefined;
-      });
-    }
-    return Effect.flatten(Effect.promise(() => inFlight!));
-  });
+  return (...args) =>
+    Effect.suspend(() => {
+      let run = inFlight;
+      if (!run) {
+        const started = Effect.runPromiseExit(make(...args));
+        run = inFlight = started;
+        void started.finally(() => {
+          if (inFlight === started) inFlight = undefined;
+        });
+      }
+      const joined = run;
+      return Effect.flatten(Effect.promise(() => joined));
+    });
 };
