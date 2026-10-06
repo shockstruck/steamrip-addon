@@ -106,6 +106,24 @@ describe("findViaSiteSearch", () => {
     expect(result.score).toBeCloseTo(0.55, 2);
   });
 
+  it("finds STAR WARS: Galactic Racer™ keeping the trademark sign", () => {
+    const html = `<div id="masonry-grid"><div class="thumb-title"><a href="https://example.invalid/galactic-racer/">STAR WARS: Galactic Racer™ Free Download</a></div></div>`;
+    const { result } = run("STAR WARS: Galactic Racer™", html);
+    expect(result.match).toEqual({
+      name: "STAR WARS: Galactic Racer™ Free Download",
+      url: "https://example.invalid/galactic-racer/",
+    });
+    expect(result.score).toBe(1);
+  });
+
+  it("rejects Star Wars Outlaws for STAR WARS: Galactic Racer™", () => {
+    const html = `<div id="masonry-grid"><div class="thumb-title"><a href="https://example.invalid/outlaws/">Star Wars Outlaws Free Download</a></div></div>`;
+    const { result } = run("STAR WARS: Galactic Racer™", html);
+    expect(result.match).toBeUndefined();
+    expect(result.best?.name).toBe("Star Wars Outlaws Free Download");
+    expect(result.score).toBeCloseTo(0.52, 2);
+  });
+
   it("treats a failed fetch as a miss instead of failing the search", () => {
     const { result } = run("Gears of War: E-Day", new Error("blocked"));
     expect(result).toEqual({ match: undefined, count: 0, best: undefined, score: 0 });
