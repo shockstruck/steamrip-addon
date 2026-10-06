@@ -421,7 +421,29 @@ const program = Effect.gen(function* () {
 
       // A miss on a stale catalog refreshes once (forced, since upgradeLocals
       // would otherwise skip a catalog under 24h old) and matches again.
-      const game = yield* refreshOnMiss(findGame);
+      let game = yield* refreshOnMiss(findGame);
+
+      // SteamRIP's A-Z list lags new posts, so a game can have a post and still
+      // be missing from the catalog. Ask the site search before giving up.
+      if (!game) {
+        const outcome = yield* scraper.searchSite(
+          steamResult.name,
+          stringSimilarity,
+          SIMILARITY_THRESHOLD,
+        );
+        console.log(
+          `SteamRIP site-search fallback for "${steamResult.name}": ${outcome.count} results, best "${outcome.best?.name ?? "none"}" ${outcome.score.toFixed(2)}`,
+        );
+        if (outcome.match) {
+          const found = outcome.match;
+          // In memory only; the next full scrape owns catalog.json.
+          if (!scraper.catalog.games.some((g) => g.url === found.url)) {
+            scraper.addGame(found);
+            search.addItems([found]);
+          }
+          game = found;
+        }
+      }
 
       if (!game) {
         console.log(

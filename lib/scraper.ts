@@ -4,6 +4,7 @@ import { Effect } from 'effect';
 import { CatalogParseError, FileSystemError, NetworkError, ScraperError } from './errors';
 import { headerManager } from './header-manager';
 import { fetchSteamripHtml } from './steamrip-fetch';
+import { findViaSiteSearch, type SiteSearchOutcome } from './site-search';
 import { join } from 'path';
 import type { DownloadLink } from './services/matcher';
 
@@ -243,6 +244,20 @@ export default class Scraper {
         return { name, url };
       });
     });
+  }
+
+  // In memory only: catalog.json belongs to the next full scrape.
+  addGame(game: { name: string; url: string }): void {
+    if (this.catalog.games.some(existing => existing.url === game.url)) return;
+    this.catalog.games.push(game);
+  }
+
+  searchSite(
+    name: string,
+    similarity: (a: string, b: string) => number,
+    threshold?: number
+  ): Effect.Effect<SiteSearchOutcome> {
+    return findViaSiteSearch({ name, similarity, threshold, fetchHtml: fetchSteamripHtml });
   }
 
   scrapeGameDetails(url: string): Effect.Effect<SteamripGameDetails, NetworkError> {
